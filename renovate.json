@@ -1,0 +1,46 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":dependencyDashboard",
+    ":prHourlyLimitNone",
+    ":pinDigests"
+  ],
+  "enabledManagers": [
+    "github-actions",
+    "regex"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true
+    },
+    {
+      "matchManagers": [
+        "regex"
+      ],
+      "groupName": "pre-commit hooks"
+    }
+  ],
+  "regexManagers": [
+    {
+      "fileMatch": [
+        "(^|/)\\.pre-commit-config\\.yaml$"
+      ],
+      "matchStrings": [
+        "repo: https://github\\.com/(?<depName>[^\\s]+)\\s+rev: (?<currentDigest>[a-f0-9]{40}) # renovate: version=(?<currentValue>v?[^\\s]+)"
+      ],
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver-coerced",
+      "autoReplaceStringTemplate": "repo: https://github.com/{{depName}}\n    rev: {{newDigest}} # renovate: version={{newValue}}"
+    }
+  ]
+}

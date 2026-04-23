@@ -1,0 +1,109 @@
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openai-tests"
+version = "0.1.0"
+description = "Quick CLI to test OpenAI-compatible API endpoints."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+openai-tests = "openai_tests.cli:main"
+
+[dependency-groups]
+dev = [
+  "hatchling==1.29.0",
+  "poethepoet==0.44.0",
+  "pre-commit==4.6.0",
+  "pytest==9.0.3",
+  "pytest-cov==7.1.0",
+  "pytest-xdist==3.8.0",
+  "ruff==0.15.11",
+  "safety==3.7.0",
+  "ty==0.0.32",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openai_tests"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: tests that require external services or container orchestration",
+]
+
+[tool.ruff]
+line-length = 120
+fix = true
+respect-gitignore = true
+show-fixes = true
+indent-width = 2
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "G", "I", "N", "PT", "RUF", "UP", "W"]
+future-annotations = true
+logger-objects = ["logger", "openai_tests.logging.logger"]
+
+[tool.ruff.analyze]
+detect-string-imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+line-ending = "lf"
+
+[tool.poe.tasks.bootstrap]
+help = "Install or refresh project dependencies with uv."
+cmd = "uv sync --all-groups"
+
+[tool.poe.tasks.fmt]
+help = "Apply Ruff formatting and safe fixes."
+shell = "ruff format . && ruff check --fix ."
+
+[tool.poe.tasks.fmt-check]
+help = "Verify formatting without modifying files."
+shell = "ruff format --check . && ruff check ."
+
+[tool.poe.tasks.lint]
+help = "Run Ruff lint checks."
+cmd = "ruff check ."
+
+[tool.poe.tasks.typecheck]
+help = "Run ty type checking."
+cmd = "ty check ."
+
+[tool.poe.tasks.test-unit]
+help = "Run the unit test suite."
+shell = "pytest -m 'not integration' --cov=src --cov-branch --cov-report=term-missing --cov-report="
+
+[tool.poe.tasks.test-integration]
+help = "Run the integration suite and bring up containers when needed."
+cmd = "python scripts/run_integration_tests.py"
+
+[tool.poe.tasks.test]
+help = "Run unit and integration tests."
+sequence = ["test-unit", "test-integration"]
+
+[tool.poe.tasks.coverage]
+help = "Validate 100% line and branch coverage."
+shell = "python -m coverage json -o coverage.json && python -m coverage xml -o coverage.xml && python scripts/check_coverage.py coverage.json"
+
+[tool.poe.tasks.safety]
+help = "Run the Safety CLI scan using SAFETY_API_KEY."
+cmd = "python scripts/run_safety_scan.py"
+
+[tool.poe.tasks.precommit]
+help = "Run pre-commit hooks across the repository."
+cmd = "pre-commit run --all-files"
+
+[tool.poe.tasks.check]
+help = "Run the full local verification suite."
+sequence = ["fmt-check", "lint", "typecheck", "test", "coverage", "precommit"]
