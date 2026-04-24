@@ -17,11 +17,22 @@ def build_parser() -> argparse.ArgumentParser:
     description="CLI scaffold for OpenAI-compatible endpoint tests.",
   )
   subparsers = parser.add_subparsers(dest="command")
+
   modules_parser = subparsers.add_parser(
     "modules",
     help="List the registered endpoint test modules.",
   )
   modules_parser.set_defaults(handler=handle_modules)
+
+  for module in list_test_modules():
+    module_parser = subparsers.add_parser(
+      module.name,
+      help=module.summary,
+      description=module.summary,
+    )
+    module.configure_parser(module_parser)
+    module_parser.set_defaults(handler=module.handler)
+
   return parser
 
 

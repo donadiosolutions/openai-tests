@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
+
+ModuleHandler = Callable[[argparse.Namespace], int]
+ParserConfigurator = Callable[[argparse.ArgumentParser], None]
 
 
 @dataclass(frozen=True, slots=True)
 class EndpointTestModule:
   name: str
   summary: str
+  configure_parser: ParserConfigurator
+  handler: ModuleHandler
 
   def render(self) -> str:
     return f"{self.name}: {self.summary}"

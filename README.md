@@ -8,6 +8,8 @@ This repository currently contains the CLI shell, module registry, and project a
 
 Future endpoint test modules should live under `src/openai_tests/test_modules/` and be registered in `src/openai_tests/registry.py`.
 
+The first module, `text-simple`, exercises both `/v1/chat/completions` and `/v1/responses` against a target OpenAI-compatible endpoint.
+
 ## Prerequisites
 
 - `pyenv`
@@ -47,4 +49,10 @@ List the registered endpoint test modules:
 
 ```bash
 uv run openai-tests modules
+```
+
+Run the first text-generation compatibility check:
+
+```bash
+uv run openai-tests text-simple --base-url https://api.openai.com --model gpt-4.1-mini
 ```
