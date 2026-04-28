@@ -1,58 +1,56 @@
 # openai-tests
 
-CLI scaffold for OpenAI-compatible endpoint tests.
+`openai-tests` is a small CLI for probing OpenAI-compatible endpoints with focused compatibility checks. Each test module sends a
+simple, inspectable request through two related API surfaces, prints the observed responses, and flags failures or suspicious response
+shape changes.
 
-## Current status
+## Quickstart
 
-This repository currently contains the CLI shell, module registry, and project automation baseline only. No endpoint test modules are implemented yet.
-
-Future endpoint test modules should live under `src/openai_tests/test_modules/` and be registered in `src/openai_tests/registry.py`.
-
-The first module, `text-simple`, exercises both `/v1/chat/completions` and `/v1/responses` against a target OpenAI-compatible endpoint.
-
-## Prerequisites
-
-- `pyenv`
-- `uv`
-- Python `3.13.3`
-
-## Bootstrap
+Install the project dependencies:
 
 ```bash
 uv sync --all-groups
-uv run poe check
-uv run poe safety
 ```
 
-## Common tasks
-
-```bash
-uv run poe fmt
-uv run poe lint
-uv run poe typecheck
-uv run poe test
-uv run poe coverage
-uv run poe safety
-```
-
-`uv run poe safety` uses the Safety CLI and requires `SAFETY_API_KEY` to be set in the environment. GitHub Actions uses the organization `SAFETY_API_KEY` secret for the same command.
-
-## CLI
-
-Show the available command surface:
-
-```bash
-uv run openai-tests --help
-```
-
-List the registered endpoint test modules:
+List the available test modules:
 
 ```bash
 uv run openai-tests modules
 ```
 
-Run the first text-generation compatibility check:
+Run the text-generation check against chat completions and responses:
 
 ```bash
-uv run openai-tests text-simple --base-url https://api.openai.com --model gpt-4.1-mini
+uv run openai-tests text-simple \
+  --base-url https://api.openai.com \
+  --model gpt-4.1-mini
 ```
+
+Run the speech-recognition check against chat completions and audio transcriptions:
+
+```bash
+uv run openai-tests asr-simple \
+  --base-url https://api.openai.com \
+  --model gpt-4o-audio-preview \
+  --transcriptions-model gpt-4o-transcribe
+```
+
+Both commands read the API key from `OPENAI_API_KEY` or `OPENAI_TESTS_API_KEY` unless `--api-key` is provided.
+
+Run the live integration suite against OpenAI:
+
+```bash
+uv run poe test-integration
+```
+
+For integration tests, `OPENAI_API_KEY` is loaded from `.env` first when that file is present, then from the process environment.
+
+## Documentation
+
+- [Documentation index](docs/index.md)
+- [Installation and configuration](docs/installation.md)
+- [CLI usage](docs/cli.md)
+- [Live OpenAI integration tests](docs/integration.md)
+- [text-simple module](docs/text-simple.md)
+- [asr-simple module](docs/asr-simple.md)
+- [Development and verification](docs/development.md)
