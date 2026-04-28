@@ -444,7 +444,7 @@ def test_warning_builders_report_mismatches_and_unavailable_tools() -> None:
   completions_warnings = asr_simple.build_completions_warnings(
     request_body={"model": "gpt-audio", "tool_choice": None, "tools": None},
     response_json={
-      "model": "gpt-audio-2026-01-01",
+      "model": "gpt-other",
       "choices": [
         {
           "message": {
@@ -455,7 +455,7 @@ def test_warning_builders_report_mismatches_and_unavailable_tools() -> None:
     },
   )
   assert completions_warnings == [
-    'WARNING: argument model was sent as "gpt-audio" and returned as "gpt-audio-2026-01-01".',
+    'WARNING: argument model was sent as "gpt-audio" and returned as "gpt-other".',
     'WARNING: a tool call was returned for tool "transcribe", but no tools were available in the request.',
   ]
 
@@ -471,8 +471,12 @@ def test_warning_builders_report_mismatches_and_unavailable_tools() -> None:
 def test_warning_builders_ignore_non_dict_responses_and_available_tools() -> None:
   assert (
     asr_simple.build_completions_warnings(
-      request_body={"tools": [{"type": "function", "function": {"name": "transcribe"}}]},
+      request_body={
+        "model": "gpt-audio",
+        "tools": [{"type": "function", "function": {"name": "transcribe"}}],
+      },
       response_json={
+        "model": "gpt-audio-2026-01-01",
         "choices": [
           {
             "message": {

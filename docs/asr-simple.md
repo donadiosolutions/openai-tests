@@ -188,6 +188,11 @@ The chat-completions response is inspected for many top-level request parameters
 stream settings, metadata, and service-tier settings. If the response reports a different value for a field that was sent, the module
 prints a warning.
 
+For `model`, a returned value may append a provider-specific suffix to the
+requested model alias without producing a warning. For example,
+`gpt-4o-audio-preview-2025-06-03` is accepted when `gpt-4o-audio-preview`
+was sent.
+
 The module also warns if chat completions returns a tool call and no matching tool was available in the request.
 
 The transcriptions response is inspected for selected transcriptions parameters, including model, language, response format, stream,

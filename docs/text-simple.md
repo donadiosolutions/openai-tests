@@ -145,9 +145,14 @@ The module reports partial success when the endpoint returns text but warnings a
 
 The responses endpoint is inspected for selected argument mismatches:
 
+- `model`
 - `tool_choice`
 - `tools`
 - `parallel_tool_calls`
+
+For `model`, a returned value may append a provider-specific suffix to the
+requested model alias without producing a warning. For example,
+`gpt-4.1-mini-2026-01-01` is accepted when `gpt-4.1-mini` was sent.
 
 If the extracted response text looks like JSON, the module also checks whether it resembles a tool-call payload. A returned tool call
 produces a warning when no matching tool was sent in the request.
