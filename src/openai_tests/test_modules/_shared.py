@@ -237,7 +237,7 @@ def determine_error_message(exchange: HttpExchange, response_text: str) -> str |
 def find_argument_mismatch_warnings(
   request_body: dict[str, Any],
   response_json: dict[str, Any],
-  field_names: tuple[str, ...] = ("tool_choice", "tools", "parallel_tool_calls"),
+  field_names: tuple[str, ...] = ("model", "tool_choice", "tools", "parallel_tool_calls"),
 ) -> list[str]:
   warnings: list[str] = []
   for field_name in field_names:
@@ -245,12 +245,28 @@ def find_argument_mismatch_warnings(
       continue
     sent_value = request_body.get(field_name)
     returned_value = response_json.get(field_name)
-    if sent_value != returned_value:
+    if not argument_values_match(field_name, sent_value, returned_value):
       warnings.append(
         f"WARNING: argument {field_name} was sent as {format_json_scalar(sent_value)} "
         f"and returned as {format_json_scalar(returned_value)}."
       )
   return warnings
+
+
+def argument_values_match(field_name: str, sent_value: Any, returned_value: Any) -> bool:
+  if sent_value == returned_value:
+    return True
+  if field_name == "model":
+    return returned_model_name_matches(sent_value, returned_value)
+  return False
+
+
+def returned_model_name_matches(sent_value: Any, returned_value: Any) -> bool:
+  if not isinstance(sent_value, str) or not isinstance(returned_value, str):
+    return False
+  if len(returned_value) <= len(sent_value) or not returned_value.startswith(sent_value):
+    return False
+  return returned_value[len(sent_value)] in "-._"
 
 
 def looks_like_json_payload(value: str) -> bool:

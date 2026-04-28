@@ -281,11 +281,13 @@ def test_determine_error_message_handles_all_failure_modes() -> None:
 def test_build_responses_warnings_reports_argument_mismatches_and_unavailable_tool_call() -> None:
   warnings = text_simple.build_responses_warnings(
     request_body={
+      "model": "gpt-text",
       "tool_choice": None,
       "tools": None,
       "parallel_tool_calls": None,
     },
     response_json={
+      "model": "gpt-other",
       "tool_choice": "auto",
       "tools": [],
       "parallel_tool_calls": True,
@@ -293,6 +295,7 @@ def test_build_responses_warnings_reports_argument_mismatches_and_unavailable_to
     response_text='{"name":"capital","parameters":{"country":"France"}}',
   )
   assert warnings == [
+    'WARNING: argument model was sent as "gpt-text" and returned as "gpt-other".',
     'WARNING: argument tool_choice was sent as null and returned as "auto".',
     "WARNING: argument tools was sent as null and returned as [].",
     "WARNING: argument parallel_tool_calls was sent as null and returned as true.",
@@ -317,6 +320,15 @@ def test_build_responses_warnings_reports_invalid_json() -> None:
   assert warnings == ["WARNING: returned JSON was not valid."]
 
 
+def test_build_responses_warnings_reports_non_string_model_mismatch() -> None:
+  warnings = text_simple.build_responses_warnings(
+    request_body={"model": {"id": "gpt-text"}},
+    response_json={"model": "gpt-text"},
+    response_text="Paris",
+  )
+  assert warnings == ['WARNING: argument model was sent as {"id": "gpt-text"} and returned as "gpt-text".']
+
+
 def test_build_responses_warnings_ignores_non_dict_response_json_and_non_tool_json() -> None:
   warnings = text_simple.build_responses_warnings(
     request_body={
@@ -333,11 +345,13 @@ def test_build_responses_warnings_ignores_non_dict_response_json_and_non_tool_js
 def test_build_responses_warnings_does_not_warn_for_available_tool_call() -> None:
   warnings = text_simple.build_responses_warnings(
     request_body={
+      "model": "gpt-text",
       "tool_choice": "auto",
       "tools": [{"type": "function", "name": "capital"}],
       "parallel_tool_calls": True,
     },
     response_json={
+      "model": "gpt-text-2026-01-01",
       "tool_choice": "auto",
       "tools": [{"type": "function", "name": "capital"}],
       "parallel_tool_calls": True,
