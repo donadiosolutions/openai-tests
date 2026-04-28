@@ -534,8 +534,83 @@ def test_warning_and_extraction_helpers_cover_malformed_shapes() -> None:
     )
     == "Alpha Bravo"
   )
+  assert (
+    asr_simple.extract_completions_response_text(
+      None,
+      'data: {"choices":[{"delta":{"content":"Alpha "}}]}\r\n\r\n'
+      'data: {"choices":[{"delta":{"content":"Bravo"}}]}\r\n\r\n',
+      stream=True,
+    )
+    == "Alpha Bravo"
+  )
   assert asr_simple.extract_transcription_response_text({"segments": ["skip", {"text": ""}]}, "", stream=False) == ""
   assert asr_simple.extract_transcription_response_text({"other": "value"}, "", stream=False) == ""
+
+
+def test_endpoint_warning_checks_ignore_omitted_optional_fields(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  transcript = "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
+  audio_path = tmp_path / "speech.wav"
+  audio_path.write_bytes(b"RIFF")
+  fixture = asr_simple.AudioFixture(path=audio_path, format="wav", bytes=b"RIFF")
+
+  def fake_send_json_request(**kwargs: object) -> asr_simple.HttpExchange:
+    payload = kwargs["payload"]
+    assert isinstance(payload, dict)
+    assert "n" not in payload
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={},
+      request_body=payload,
+      response_status=200,
+      response_headers={},
+      response_body_text=f'{{"n":1,"choices":[{{"message":{{"content":"{transcript}"}}}}]}}',
+      response_json={"n": 1, "choices": [{"message": {"content": transcript}}]},
+    )
+
+  def fake_send_multipart_request(**kwargs: object) -> asr_simple.HttpExchange:
+    fields = kwargs["fields"]
+    assert isinstance(fields, dict)
+    assert "language" not in fields
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={},
+      request_body=fields,
+      response_status=200,
+      response_headers={},
+      response_body_text=f'{{"language":"en","text":"{transcript}"}}',
+      response_json={"language": "en", "text": transcript},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_json_request", fake_send_json_request)
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
+
+  completions_result = asr_simple.run_completions_test(
+    base_url="https://example.com",
+    api_key=None,
+    normalized_payload={"model": "gpt-audio", "messages": [], "n": None},
+    expected_transcript=transcript,
+    minimum_expected_words=10,
+    timeout=5.0,
+  )
+  transcriptions_result = asr_simple.run_transcriptions_test(
+    base_url="https://example.com",
+    api_key=None,
+    normalized_payload={"model": "gpt-asr", "language": None},
+    audio_fixture=fixture,
+    expected_transcript=transcript,
+    minimum_expected_words=10,
+    timeout=5.0,
+  )
+
+  assert completions_result.warnings == ()
+  assert completions_result.partial_success is False
+  assert transcriptions_result.warnings == ()
+  assert transcriptions_result.partial_success is False
 
 
 def test_run_executes_both_endpoints_and_renders_verbose_output(

@@ -241,7 +241,7 @@ def find_argument_mismatch_warnings(
 ) -> list[str]:
   warnings: list[str] = []
   for field_name in field_names:
-    if field_name not in response_json:
+    if field_name not in request_body or field_name not in response_json:
       continue
     sent_value = request_body.get(field_name)
     returned_value = response_json.get(field_name)

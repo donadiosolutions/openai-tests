@@ -392,16 +392,17 @@ def run_responses_test(
   question: str,
   timeout: float,
 ) -> EndpointExecutionResult:
+  pruned_payload = prune_none(normalized_payload)
   exchange = send_json_request(
     url=build_api_url(base_url, "/v1/responses"),
     api_key=api_key,
-    payload=prune_none(normalized_payload),
+    payload=pruned_payload,
     timeout=timeout,
   )
   response_text = extract_responses_output_text(exchange.response_json)
   error_message = determine_error_message(exchange, response_text)
   warnings = build_responses_warnings(
-    request_body=normalized_payload,
+    request_body=pruned_payload,
     response_json=exchange.response_json,
     response_text=response_text,
   )
@@ -414,7 +415,7 @@ def run_responses_test(
       method=exchange.method,
       url=exchange.url,
       request_headers=exchange.request_headers,
-      request_body=normalized_payload,
+      request_body=pruned_payload,
       response_status=exchange.response_status,
       response_headers=exchange.response_headers,
       response_body_text=exchange.response_body_text,

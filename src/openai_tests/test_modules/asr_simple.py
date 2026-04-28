@@ -473,16 +473,18 @@ def run_completions_test(
   minimum_expected_words: int,
   timeout: float,
 ) -> EndpointExecutionResult:
+  pruned_payload = prune_none(normalized_payload)
   exchange = send_json_request(
     url=build_api_url(base_url, "/v1/chat/completions"),
     api_key=api_key,
-    payload=prune_none(normalized_payload),
+    payload=pruned_payload,
     timeout=timeout,
   )
+  stream = pruned_payload.get("stream") is True
   response_text = extract_completions_response_text(
     exchange.response_json,
     exchange.response_body_text,
-    stream=normalized_payload.get("stream") is True,
+    stream=stream,
   )
   error_message = determine_asr_error_message(
     exchange=exchange,
@@ -491,10 +493,10 @@ def run_completions_test(
     minimum_expected_words=minimum_expected_words,
     format_error_message=validate_completions_response_format(
       exchange,
-      stream=normalized_payload.get("stream") is True,
+      stream=stream,
     ),
   )
-  warnings = build_completions_warnings(request_body=normalized_payload, response_json=exchange.response_json)
+  warnings = build_completions_warnings(request_body=pruned_payload, response_json=exchange.response_json)
   return EndpointExecutionResult(
     name="/v1/chat/completions",
     question=expected_transcript,
@@ -504,7 +506,7 @@ def run_completions_test(
       method=exchange.method,
       url=exchange.url,
       request_headers=exchange.request_headers,
-      request_body=normalized_payload,
+      request_body=pruned_payload,
       response_status=exchange.response_status,
       response_headers=exchange.response_headers,
       response_body_text=exchange.response_body_text,
@@ -536,8 +538,8 @@ def run_transcriptions_test(
     file_format=audio_fixture.format,
     timeout=timeout,
   )
-  stream = normalized_payload.get("stream") is True
-  response_format = normalized_payload.get("response_format")
+  stream = pruned_payload.get("stream") is True
+  response_format = pruned_payload.get("response_format")
   response_text = extract_transcription_response_text(
     exchange.response_json, exchange.response_body_text, stream=stream
   )
@@ -552,8 +554,8 @@ def run_transcriptions_test(
       stream=stream,
     ),
   )
-  warnings = build_transcriptions_warnings(request_body=normalized_payload, response_json=exchange.response_json)
-  request_body = dict(normalized_payload)
+  warnings = build_transcriptions_warnings(request_body=pruned_payload, response_json=exchange.response_json)
+  request_body = dict(pruned_payload)
   request_body["file"] = {
     "filename": audio_fixture.path.name,
     "content_type": content_type_for_audio_format(audio_fixture.format),
@@ -921,7 +923,8 @@ def extract_transcription_response_text(response_json: Any | None, response_body
 
 def parse_sse_events(response_body_text: str) -> list[dict[str, Any]]:
   events: list[dict[str, Any]] = []
-  for raw_event in response_body_text.split("\n\n"):
+  normalized_body = response_body_text.replace("\r\n", "\n").replace("\r", "\n")
+  for raw_event in normalized_body.split("\n\n"):
     data_parts: list[str] = []
     for line in raw_event.splitlines():
       if not line.startswith("data:"):

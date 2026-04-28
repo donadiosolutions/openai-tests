@@ -582,12 +582,56 @@ def test_run_returns_partial_success_when_responses_endpoint_returns_tool_call_w
   assert text_simple.run(args) == 1
   captured = capsys.readouterr()
   assert "PARTIAL SUCCESS" in captured.out
-  assert 'WARNING: argument tool_choice was sent as null and returned as "auto".' in captured.out
-  assert "WARNING: argument tools was sent as null and returned as []." in captured.out
-  assert "WARNING: argument parallel_tool_calls was sent as null and returned as true." in captured.out
+  assert "WARNING: argument tool_choice was sent" not in captured.out
+  assert "WARNING: argument tools was sent" not in captured.out
+  assert "WARNING: argument parallel_tool_calls was sent" not in captured.out
   assert (
     'WARNING: a tool call was returned for tool "capital", but no tools were available in the request.' in captured.out
   )
+
+
+def test_run_responses_test_ignores_omitted_optional_fields_in_warning_checks(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  def fake_send_json_request(
+    *, url: str, api_key: str | None, payload: dict[str, object], timeout: float
+  ) -> text_simple.HttpExchange:
+    assert "tool_choice" not in payload
+    assert "tools" not in payload
+    assert "parallel_tool_calls" not in payload
+    return text_simple.HttpExchange(
+      method="POST",
+      url=url,
+      request_headers={},
+      request_body=payload,
+      response_status=200,
+      response_headers={},
+      response_body_text='{"output_text":"Paris","tool_choice":"auto","tools":[],"parallel_tool_calls":true}',
+      response_json={
+        "output_text": "Paris",
+        "tool_choice": "auto",
+        "tools": [],
+        "parallel_tool_calls": True,
+      },
+    )
+
+  monkeypatch.setattr(text_simple, "send_json_request", fake_send_json_request)
+  result = text_simple.run_responses_test(
+    base_url="https://example.com",
+    api_key=None,
+    normalized_payload={
+      "model": "gpt-test",
+      "input": "Question?",
+      "tool_choice": None,
+      "tools": None,
+      "parallel_tool_calls": None,
+    },
+    question="Question?",
+    timeout=5.0,
+  )
+
+  assert result.warnings == ()
+  assert result.partial_success is False
 
 
 def test_run_returns_configuration_error_for_invalid_json(capsys: pytest.CaptureFixture[str]) -> None:
