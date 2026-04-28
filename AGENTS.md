@@ -2,53 +2,21 @@
 
 Operational runbook for coding agents working in this repository.
 
-## GitHub Naming Overrides
-
-These instructions override conflicting defaults in bundled skills such as `github:yeet`.
-
-- When Codex creates a git branch for work that may be pushed to GitHub, do not prepend `codex/` to the branch name.
-- Use a plain descriptive branch name instead, for example `fix-login-timeout`, not `codex/fix-login-timeout`.
-- When Codex opens a pull request, do not prepend `[codex]` to the PR title.
-- Use a plain descriptive PR title that reflects the change itself.
-- Treat these naming rules as higher priority than skill-level defaults when they conflict.
-
-## Safety
-
-- Every time you import a Python package or add a package to a `requirements.txt` or
-  `pyproject.toml`, use the safety-mcp to check if the version you have chosen is secure and is
-  the latest version of the package. Make sure you always use the `latest_secure_version`
-  returned by safety-mcp for any package.
-- If a package already exists in the codebase and a user asks you to check it for vulnerabilities,
-  use safety-mcp, evaluate whether there are any secure versions in the same major version, and
-  acknowledge those options. Also report the latest secure version.
-
-## JavaScript REPL (Node)
-
-- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.
-- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input, optionally with a first-line `// codex-js-repl: timeout_ms=15000`. Do not wrap code in JSON, quotes, or markdown fences.
-- Helpers: `codex.cwd`, `codex.homeDir`, `codex.tmpDir`, `codex.tool(name, args?)`, and `codex.emitImage(imageLike)`.
-- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike. Nested tool outputs stay inside JavaScript unless you emit them explicitly.
-- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call
-  it. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`,
-  or a raw tool response object with exactly one image and no text.
-- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved
-  references and persisted objects can reuse them in later cells, but async callbacks that fire
-  after a cell finishes still fail because no exec is active.
-- Request full-resolution image processing with `detail: "original"` only when the `view_image` tool schema includes a `detail` argument. The same availability applies to `codex.emitImage(...)`.
-- Raw MCP image blocks can request the same behavior by returning `_meta: { "codex/imageDetail": "original" }` on the image content item.
-- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters.
-- Top-level bindings persist across cells. If a cell throws, prior bindings remain available and bindings that finished initializing before the throw often remain usable in later cells.
-- Top-level static import declarations are currently unsupported in `js_repl`; use dynamic imports instead.
-- Avoid direct access to `process.stdout`, `process.stderr`, or `process.stdin`; use `console.log`, `codex.tool(...)`, and `codex.emitImage(...)`.
+Read also @AGENTS.local.md when one is available. This file should be gitignored and is user-specific.
 
 ## Invariants
 
 - keep an `AGENTS.md` up to date whenever repository changes invalidate or materially change its guidance
 - never modify this `Invariants` section unless explicitly instructed by a human
 - obey the `AGENTS.md` nearest to the file being modified
-- never weaken verification to obtain a passing result: this includes disabling, deleting, skipping, xfail-ing, or diluting tests, coverage checks, or CI quality gates
+- always write or update tests before writing application code for any behavior change, bug fix, feature, or executable refactor
+- verify that new or changed tests fail for the expected reason before changing application code
+- never weaken verification to obtain a passing result: this includes disabling, deleting, skipping, xfail-ing, or diluting tests, coverage checks, or CI quality gates.
 - never change coverage thresholds, test selection rules, fixtures, snapshots, golden files, expected outputs, CI checks, or test data merely to make failures disappear unless a human explicitly approves that exact change
 - never add `# noqa`, `# type: ignore`, `pragma: no cover`, or similar escape hatches unless explicitly instructed by a human
+- every dependency must be pinned to an exact version and protected by a cryptographic integrity mechanism such as a lockfile
+  hash, checksum, or image digest; this includes CI actions, tools, scripts, images, and other artifacts that are not already
+  provided by the runner image. If the workflow downloads it, pin and verify it.
 - add extra `AGENTS.md` files whenever there are substantial extra instructions pertaining to a given subtree
 
 ## Workflow
@@ -62,6 +30,15 @@ These instructions override conflicting defaults in bundled skills such as `gith
 - Read the relevant implementation and tests before changing behavior.
 - For behavior changes or bug fixes, update tests first when practical and verify they fail for the expected reason before changing implementation.
 
+## Dependence Safety
+
+- Every time you import a Python package or add a package to a `requirements.txt` or `pyproject.toml`, use the safety-mcp to
+  check if the version you have chosen is secure and is the latest version of the package. Make sure you always use the
+  `latest_secure_version` returned by safety-mcp for any package.
+- If a package already exists in the codebase and a user asks you to check it for vulnerabilities, use safety-mcp, evaluate
+  whether there are any secure versions in the same major version, and acknowledge those options. Also report the latest secure
+  version.
+
 ## Required verification
 
 Run these commands before treating a code-changing task as complete:
@@ -72,11 +49,20 @@ uv run poe check
 uv run poe safety
 ```
 
-## Completion
+For behavior changes, bug fixes, features, or executable refactors, also run the relevant tests before and after implementation:
+
+- before implementation: prove the new or changed test fails for the expected reason
+- after implementation: prove the same test passes
+- before completion: prove the full required verification passes
+
+## What done means
 
 A task is not complete unless:
 
+- tests were written or updated before application code when the change affected executable behavior
+- new or changed tests were observed failing for the expected reason before implementation
 - the intended behavior is covered by tests when applicable
+- new or changed tests pass after implementation
 - 100% line and branch coverage remain intact
 - all required checks pass
-- the final response states what changed, what verification ran, and any unresolved assumptions or concerns
+- the final response states what changed, which tests failed before implementation, what verification passed afterward, and any unresolved assumptions or concerns

@@ -19,12 +19,14 @@ def test_main_prints_help_without_a_subcommand(capsys: pytest.CaptureFixture[str
   captured = capsys.readouterr()
   assert "usage:" in captured.out
   assert "modules" in captured.out
+  assert "asr-simple" in captured.out
   assert "text-simple" in captured.out
 
 
 def test_main_lists_registered_modules(capsys: pytest.CaptureFixture[str]) -> None:
   assert main(["modules"]) == 0
   captured = capsys.readouterr()
+  assert "asr-simple" in captured.out
   assert "text-simple" in captured.out
 
 
@@ -32,6 +34,12 @@ def test_parser_accepts_text_simple_command() -> None:
   parser = build_parser()
   parsed = parser.parse_args(["text-simple"])
   assert parsed.command == "text-simple"
+
+
+def test_parser_accepts_asr_simple_command() -> None:
+  parser = build_parser()
+  parsed = parser.parse_args(["asr-simple"])
+  assert parsed.command == "asr-simple"
 
 
 def test_main_module_raises_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:

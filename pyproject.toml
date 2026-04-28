@@ -16,6 +16,7 @@ openai-tests = "openai_tests.cli:main"
 
 [dependency-groups]
 dev = [
+  "actionlint-py==1.7.12.24",
   "hatchling==1.29.0",
   "poethepoet==0.44.0",
   "pre-commit==4.6.0",
@@ -80,9 +81,17 @@ cmd = "ruff check ."
 help = "Run ty type checking."
 cmd = "ty check ."
 
-[tool.poe.tasks.test-unit]
-help = "Run the unit test suite."
+[tool.poe.tasks.actionlint]
+help = "Lint GitHub Actions workflows."
+cmd = "actionlint"
+
+[tool.poe.tasks.pytest-unit]
+help = "Run the Python unit test suite."
 shell = "pytest -m 'not integration' --cov=src --cov-branch --cov-report=term-missing --cov-report="
+
+[tool.poe.tasks.test-unit]
+help = "Run unit-level repository checks."
+sequence = ["actionlint", "pytest-unit"]
 
 [tool.poe.tasks.test-integration]
 help = "Run the integration suite and bring up containers when needed."
@@ -91,6 +100,14 @@ cmd = "python scripts/run_integration_tests.py"
 [tool.poe.tasks.test]
 help = "Run unit and integration tests."
 sequence = ["test-unit", "test-integration"]
+
+[tool.poe.tasks.check-unit]
+help = "Run the CI unit job checks."
+sequence = ["fmt-check", "lint", "typecheck", "test-unit", "coverage", "precommit"]
+
+[tool.poe.tasks.check-integration]
+help = "Run the CI integration job checks."
+sequence = ["test-integration"]
 
 [tool.poe.tasks.coverage]
 help = "Validate 100% line and branch coverage."
