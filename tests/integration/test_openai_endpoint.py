@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from openai_tests.test_modules import asr_simple, text_simple
+from openai_tests.test_modules import asr_simple, list_models, text_simple
 from openai_tests.test_modules._shared import EndpointExecutionResult, determine_overall_status
 
 OPENAI_BASE_URL = "https://api.openai.com"
@@ -140,3 +140,26 @@ def test_asr_simple_runs_against_openai_endpoint(tmp_path: Path) -> None:
   )
 
   assert_endpoints_succeeded(completions_result, transcriptions_result)
+
+
+def test_list_models_runs_against_openai_endpoint() -> None:
+  args = parse_module_args(
+    list_models.configure_parser,
+    [
+      "--base-url",
+      OPENAI_BASE_URL,
+      "--api-key",
+      require_openai_api_key(),
+      "--timeout",
+      "90",
+    ],
+  )
+
+  result = list_models.run_models_test(
+    base_url=list_models.resolve_base_url(args.base_url),
+    api_key=list_models.resolve_api_key(args.api_key),
+    timeout=args.timeout,
+  )
+
+  assert_endpoints_succeeded(result)
+  assert result.response_text.strip()

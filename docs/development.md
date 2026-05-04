@@ -19,6 +19,7 @@ Common endpoint-test behavior lives in `src/openai_tests/test_modules/_shared.py
 - `EndpointExecutionResult`: endpoint-level result data used by printers.
 - JSON parsing helpers with `@file` support.
 - optional-value pruning for request payloads.
+- GET request sending with HTTP and URL error capture.
 - JSON request sending with HTTP and URL error capture.
 - base URL normalization.
 - chat-completions text extraction.
@@ -94,10 +95,10 @@ Run the full local check suite:
 uv run poe check
 ```
 
-Run the Safety scan:
+Run the authenticated Socket manifest generation and scan:
 
 ```bash
-uv run poe safety
+uv run poe socket
 ```
 
 `uv run poe check` includes:
@@ -111,23 +112,46 @@ uv run poe safety
 - coverage threshold validation
 - pre-commit hooks
 
+`uv run poe socket` installs the pinned Socket CLI from `package-lock.json`,
+generates CycloneDX manifests through `socket manifest cdxgen`, and runs a
+read-only Socket scan preflight to verify the manifests are accepted. It requires
+`SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or `SOCKET_CLI_API_TOKEN`. The Socket org
+defaults to `donadio-solutions` and can be overridden with `SOCKET_ORG` or
+`SOCKET_DEFAULT_ORG`.
+
 The repository requires 100% line coverage and 100% branch coverage.
 
-CI uses the same Poe entry points. The GitHub Actions workflow has separate `unit` and `integration` jobs that run in parallel. The
-`integration` job receives `OPENAI_API_KEY` from `secrets.OPENAI_API_KEY`. A final `validate` job depends on both jobs and succeeds only
-when both completed successfully.
+CI uses the same Poe entry points for the Python checks. The `unit` job
+generates `coverage.xml` through `uv run poe check-unit` and uploads that report
+to Codecov. The Codecov GitHub Action is pinned by commit SHA, the Codecov CLI
+version is pinned explicitly, and uploads authenticate through GitHub OIDC.
+
+The GitHub Actions workflow has separate `unit` and `integration` jobs that run
+in parallel, and the `integration` job receives `OPENAI_API_KEY` from
+`secrets.OPENAI_API_KEY`. A final `validate` job depends on both jobs and
+succeeds only when both completed successfully.
+
+Socket's GitHub App supplies the dependency-security checks as separate PR
+checks:
+
+- `Socket Security: Pull Request Alerts`
+- `Socket Security: Project Report`
+
+Those Socket App checks are required in the repository ruleset. They are not
+duplicated as GitHub Actions jobs.
 
 ## actionlint
 
 GitHub Actions workflows are linted through the `actionlint` Poe task. The pinned Python package is `actionlint-py`, and the workflow
 runner label `blacksmith-2vcpu-ubuntu-2404` is declared in `.github/actionlint.yaml` so actionlint recognizes the custom runner.
 
-## Dependency Safety
+## Dependency Security
 
-Dependencies are pinned in `pyproject.toml` and locked in `uv.lock`. When adding or importing a Python package, check it with
-Safety MCP first and use the latest secure version returned by the tool.
-
-`uv run poe safety` performs the repository Safety CLI scan and requires `SAFETY_API_KEY`.
+Dependencies are pinned in `pyproject.toml` and `package.json`, and locked in
+`uv.lock` and `package-lock.json`. Before adding a new package, run
+`socket package score <ecosystem> <name>@<version> --json` and evaluate the
+score, alerts, and transitive dependency findings. If Socket reports high-risk
+findings, stop and explain the risk before changing dependencies.
 
 ## Documentation
 

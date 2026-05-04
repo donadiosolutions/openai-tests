@@ -19,6 +19,7 @@ Run a module:
 ```bash
 uv run openai-tests text-simple
 uv run openai-tests asr-simple
+uv run openai-tests list-models
 ```
 
 Each module exposes its own help:
@@ -26,6 +27,7 @@ Each module exposes its own help:
 ```bash
 uv run openai-tests text-simple --help
 uv run openai-tests asr-simple --help
+uv run openai-tests list-models --help
 ```
 
 ## Common Arguments
@@ -37,7 +39,7 @@ All implemented modules support:
 - `--timeout`: HTTP timeout in seconds. The default is `30`.
 - `--verbose`: print full redacted HTTP requests and responses.
 
-Both modules also expose prompt text controls:
+`text-simple` and `asr-simple` also expose prompt text controls:
 
 - `--system-prompt`
 - `--developer-prompt`
@@ -84,7 +86,7 @@ If neither form is provided, the value remains unset and is omitted.
 
 ## Output
 
-Each endpoint prints:
+Text and ASR endpoint checks print:
 
 - endpoint name
 - status label
@@ -92,6 +94,9 @@ Each endpoint prints:
 - response text or transcript
 - error message, if any
 - warnings, if any
+
+`list-models` prints the endpoint name, status label, returned model IDs, and
+error message when the response does not conform to the schema.
 
 Status labels are:
 

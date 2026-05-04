@@ -17,6 +17,8 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 - every dependency must be pinned to an exact version and protected by a cryptographic integrity mechanism such as a lockfile
   hash, checksum, or image digest; this includes CI actions, tools, scripts, images, and other artifacts that are not already
   provided by the runner image. If the workflow downloads it, pin and verify it.
+- before adding any new dependency, run `socket package score <ecosystem> <name>@<version> --json` and evaluate the score, alerts,
+  and transitive dependency findings before deciding whether to use it
 - add extra `AGENTS.md` files whenever there are substantial extra instructions pertaining to a given subtree
 
 ## Workflow
@@ -24,20 +26,19 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 - Use `uv` for Python dependency and environment management. Do not use `pip`, `python -m venv`, Poetry, or Pipenv in this repository.
 - Let `pyenv` manage the interpreter version through `.python-version`.
 - Prefer `uv run poe <task>` for routine workflows instead of ad-hoc command sequences.
-- `uv run poe safety` requires `SAFETY_API_KEY` to be present in the environment.
 - Future endpoint test modules belong under `src/openai_tests/test_modules/`.
 - Register future endpoint test modules in `src/openai_tests/registry.py` before wiring them into the CLI.
 - Read the relevant implementation and tests before changing behavior.
 - For behavior changes or bug fixes, update tests first when practical and verify they fail for the expected reason before changing implementation.
 
-## Dependence Safety
+## Dependency Security
 
-- Every time you import a Python package or add a package to a `requirements.txt` or `pyproject.toml`, use the safety-mcp to
-  check if the version you have chosen is secure and is the latest version of the package. Make sure you always use the
-  `latest_secure_version` returned by safety-mcp for any package.
-- If a package already exists in the codebase and a user asks you to check it for vulnerabilities, use safety-mcp, evaluate
-  whether there are any secure versions in the same major version, and acknowledge those options. Also report the latest secure
-  version.
+- Before adding any new dependency, check it with Socket for known vulnerabilities and supply-chain risk.
+- Use `socket package score <ecosystem> <name>@<version> --json` before deciding whether to add the dependency.
+- If Socket reports high-risk findings, known malware, suspicious behavior, or relevant vulnerabilities, stop and explain the risk
+  instead of installing the dependency silently.
+- If Socket is unavailable, do not proceed as though the package was checked. Tell the user the Socket check could not be completed
+  and ask whether to continue, use another package, or defer the install.
 
 ## Required verification
 
@@ -46,7 +47,7 @@ Run these commands before treating a code-changing task as complete:
 ```bash
 uv run poe fmt
 uv run poe check
-uv run poe safety
+uv run poe socket
 ```
 
 For behavior changes, bug fixes, features, or executable refactors, also run the relevant tests before and after implementation:

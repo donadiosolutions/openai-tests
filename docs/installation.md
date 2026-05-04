@@ -61,16 +61,6 @@ produce endpoint URLs under `/v1/...`.
 `--transcriptions-model`, `OPENAI_TRANSCRIPTIONS_MODEL`, `OPENAI_TESTS_TRANSCRIPTIONS_MODEL`, or `gpt-4o-transcribe` for audio
 transcriptions.
 
-## Safety Scan
-
-The repository includes a Safety CLI task:
-
-```bash
-uv run poe safety
-```
-
-This task requires `SAFETY_API_KEY` in the environment. CI uses the organization secret with the same name.
-
 ## Local Verification
 
 The standard local verification commands are:
@@ -78,8 +68,24 @@ The standard local verification commands are:
 ```bash
 uv run poe fmt
 uv run poe check
-uv run poe safety
+uv run poe socket
 ```
 
 `uv run poe check` runs formatting checks, Ruff linting, type checking, actionlint, unit and integration tests, coverage validation, and
 pre-commit hooks.
+
+## Socket Scan
+
+The repository uses Socket for dependency security scanning. Install the Node
+tooling from the checked-in lockfile, generate Socket manifests, and run a
+read-only authenticated scan preflight with:
+
+```bash
+uv run poe socket
+```
+
+The task requires `SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or
+`SOCKET_CLI_API_TOKEN` in the environment. It scans the
+`donadio-solutions` Socket organization by default; override that with
+`SOCKET_ORG` or `SOCKET_DEFAULT_ORG` when needed. CI uses
+`secrets.SOCKET_API_KEY` for the required Socket GitHub App checks.

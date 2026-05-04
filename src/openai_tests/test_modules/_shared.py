@@ -146,6 +146,60 @@ def send_json_request(
     )
 
 
+def send_get_request(
+  *,
+  url: str,
+  api_key: str | None,
+  timeout: float,
+) -> HttpExchange:
+  request_headers = {"Accept": "application/json"}
+  if api_key:
+    request_headers["Authorization"] = f"Bearer {api_key}"
+
+  http_request = request.Request(
+    url=url,
+    headers=request_headers,
+    method="GET",
+  )
+
+  try:
+    with request.urlopen(http_request, timeout=timeout) as response:
+      body = response.read()
+      return build_http_exchange(
+        method="GET",
+        url=url,
+        request_headers=request_headers,
+        request_body=None,
+        response_status=response.getcode(),
+        response_headers=dict(response.headers.items()),
+        response_body=body,
+      )
+  except error.HTTPError as exc:
+    body = exc.read()
+    return build_http_exchange(
+      method="GET",
+      url=url,
+      request_headers=request_headers,
+      request_body=None,
+      response_status=exc.code,
+      response_headers=dict(exc.headers.items()),
+      response_body=body,
+      error_message=str(exc),
+    )
+  except error.URLError as exc:
+    return HttpExchange(
+      method="GET",
+      url=url,
+      request_headers=request_headers,
+      request_body=None,
+      response_status=None,
+      response_headers={},
+      response_body_text="",
+      response_json=None,
+      error_message=str(exc.reason),
+    )
+
+
 def build_http_exchange(
   *,
   method: str,

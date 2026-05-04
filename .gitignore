@@ -35,6 +35,9 @@ dist/
 .eggs/
 pip-wheel-metadata/
 
+# Node tooling used by Socket scans
+node_modules/
+
 # Notebook and REPL artifacts
 .ipynb_checkpoints/
 

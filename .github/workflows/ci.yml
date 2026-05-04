@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   unit:
@@ -21,10 +22,16 @@ jobs:
         run: uv sync --all-groups --frozen
       - name: Run unit checks
         run: uv run poe check-unit
-      - name: Run Safety scan
-        env:
-          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
-        run: uv run poe safety
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: coverage.xml
+          flags: unit
+          name: unit
+          use_oidc: true
+          version: v11.2.8
 
   integration:
     name: integration

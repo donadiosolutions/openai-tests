@@ -27,6 +27,7 @@ The suite currently runs:
 
 - `text-simple` against `/v1/chat/completions` and `/v1/responses`
 - `asr-simple` against `/v1/chat/completions` and `/v1/audio/transcriptions`
+- `list-models` against `/v1/models`
 
 The ASR test uses a small checked-in MP3 fixture containing the default expected transcript. This keeps the live integration suite
 independent from `espeak-ng` availability on the CI runner while preserving the module's normal synthesis behavior for CLI users.
@@ -46,8 +47,15 @@ These variables are integration-test specific. They do not change the CLI module
 
 GitHub Actions runs three jobs:
 
-- `unit`: formatting, linting, typing, actionlint, unit tests, coverage validation, pre-commit, and Safety.
+- `unit`: formatting, linting, typing, actionlint, unit tests, coverage validation, and pre-commit.
 - `integration`: live OpenAI integration tests through `uv run poe check-integration`.
 - `validate`: depends on `unit` and `integration` and succeeds only when both jobs succeeded.
 
-The `unit` and `integration` jobs run in parallel. The `validate` job is the aggregate status check.
+The `unit` and `integration` jobs run in parallel. The `validate` job is the
+aggregate GitHub Actions status check. The `unit` job uploads the generated
+`coverage.xml` report to Codecov after local coverage validation passes.
+
+Socket's GitHub App also posts `Socket Security: Pull Request Alerts` and
+`Socket Security: Project Report` checks. The repository ruleset requires those
+Socket App checks directly, so the workflow does not define a duplicate Socket
+Actions job.
