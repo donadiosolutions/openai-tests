@@ -9,6 +9,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOCKET_BIN = PROJECT_ROOT / "node_modules" / ".bin" / "socket"
@@ -73,14 +74,30 @@ def resolve_repo(env: Mapping[str, str]) -> str:
   if github_repository:
     return github_repository.rsplit("/", maxsplit=1)[-1]
 
-  origin_url = capture(["git", "remote", "get-url", "origin"], env=env)
-  if origin_url.endswith(".git"):
-    origin_url = origin_url[:-4]
-  if origin_url.startswith("git@github.com:"):
-    return origin_url.removeprefix("git@github.com:").rsplit("/", maxsplit=1)[-1]
-  if "github.com/" in origin_url:
-    return origin_url.rsplit("/", maxsplit=1)[-1]
+  origin_url = normalize_git_suffix(capture(["git", "remote", "get-url", "origin"], env=env))
+  github_repo = parse_github_repo_from_origin(origin_url)
+  if github_repo is not None:
+    return github_repo
   return PROJECT_ROOT.name
+
+
+def normalize_git_suffix(value: str) -> str:
+  return value[:-4] if value.endswith(".git") else value
+
+
+def parse_github_repo_from_origin(origin_url: str) -> str | None:
+  if origin_url.startswith("git@github.com:"):
+    path = origin_url.removeprefix("git@github.com:")
+    return path.rsplit("/", maxsplit=1)[-1] if "/" in path else None
+
+  parsed = urlparse(origin_url)
+  if parsed.hostname != "github.com":
+    return None
+
+  parts = [part for part in parsed.path.split("/") if part]
+  if len(parts) < 2:
+    return None
+  return parts[-1]
 
 
 def resolve_socket_org(env: Mapping[str, str]) -> str:

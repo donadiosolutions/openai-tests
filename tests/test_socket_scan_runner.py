@@ -26,6 +26,13 @@ def test_resolve_repo_parses_github_origin(monkeypatch: pytest.MonkeyPatch) -> N
   assert run_socket_scan.resolve_repo({}) == "repo"
 
 
+def test_parse_github_repo_from_origin_handles_https_and_rejects_non_github_hosts() -> None:
+  assert run_socket_scan.parse_github_repo_from_origin("https://github.com/owner/repo") == "repo"
+  assert run_socket_scan.parse_github_repo_from_origin("ssh://git@github.com/owner/repo") == "repo"
+  assert run_socket_scan.parse_github_repo_from_origin("https://example.test/github.com/owner/repo") is None
+  assert run_socket_scan.parse_github_repo_from_origin("https://github.com/owner") is None
+
+
 def test_resolve_repo_falls_back_to_project_name(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(run_socket_scan, "capture", lambda *_args, **_kwargs: "")
 
