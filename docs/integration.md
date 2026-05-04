@@ -52,7 +52,8 @@ GitHub Actions runs three jobs:
 - `validate`: depends on `unit` and `integration` and succeeds only when both jobs succeeded.
 
 The `unit` and `integration` jobs run in parallel. The `validate` job is the
-aggregate GitHub Actions status check.
+aggregate GitHub Actions status check. The `unit` job uploads the generated
+`coverage.xml` report to Codecov after local coverage validation passes.
 
 Socket's GitHub App also posts `Socket Security: Pull Request Alerts` and
 `Socket Security: Project Report` checks. The repository ruleset requires those

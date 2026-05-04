@@ -121,9 +121,13 @@ defaults to `donadio-solutions` and can be overridden with `SOCKET_ORG` or
 
 The repository requires 100% line coverage and 100% branch coverage.
 
-CI uses the same Poe entry points for the Python checks. The GitHub Actions
-workflow has separate `unit` and `integration` jobs that run in parallel, and
-the `integration` job receives `OPENAI_API_KEY` from
+CI uses the same Poe entry points for the Python checks. The `unit` job
+generates `coverage.xml` through `uv run poe check-unit` and uploads that report
+to Codecov. The Codecov GitHub Action is pinned by commit SHA, the Codecov CLI
+version is pinned explicitly, and uploads authenticate through GitHub OIDC.
+
+The GitHub Actions workflow has separate `unit` and `integration` jobs that run
+in parallel, and the `integration` job receives `OPENAI_API_KEY` from
 `secrets.OPENAI_API_KEY`. A final `validate` job depends on both jobs and
 succeeds only when both completed successfully.
 

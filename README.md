@@ -1,5 +1,7 @@
 # openai-tests
 
+[![codecov](https://codecov.io/gh/donadiosolutions/openai-tests/graph/badge.svg)](https://codecov.io/gh/donadiosolutions/openai-tests)
+
 `openai-tests` is a small CLI for probing OpenAI-compatible endpoints with focused compatibility checks. Each test module sends a
 simple, inspectable request through two related API surfaces, prints the observed responses, and flags failures or suspicious response
 shape changes.
