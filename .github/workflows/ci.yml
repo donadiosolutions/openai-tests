@@ -21,10 +21,6 @@ jobs:
         run: uv sync --all-groups --frozen
       - name: Run unit checks
         run: uv run poe check-unit
-      - name: Run Safety scan
-        env:
-          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
-        run: uv run poe safety
 
   integration:
     name: integration

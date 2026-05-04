@@ -52,6 +52,15 @@ uv run poe test-integration
 
 For integration tests, `OPENAI_API_KEY` is loaded from `.env` first when that file is present, then from the process environment.
 
+Run the Socket dependency-security gate:
+
+```bash
+uv run poe socket
+```
+
+The Socket task reads `SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or
+`SOCKET_CLI_API_TOKEN`.
+
 ## Documentation
 
 - [Documentation index](docs/index.md)

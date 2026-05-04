@@ -24,7 +24,6 @@ dev = [
   "pytest-cov==7.1.0",
   "pytest-xdist==3.8.0",
   "ruff==0.15.11",
-  "safety==3.7.0",
   "ty==0.0.32",
 ]
 
@@ -113,9 +112,9 @@ sequence = ["test-integration"]
 help = "Validate 100% line and branch coverage."
 shell = "python -m coverage json -o coverage.json && python -m coverage xml -o coverage.xml && python scripts/check_coverage.py coverage.json"
 
-[tool.poe.tasks.safety]
-help = "Run the Safety CLI scan using SAFETY_API_KEY."
-cmd = "python scripts/run_safety_scan.py"
+[tool.poe.tasks.socket]
+help = "Generate Socket manifests and run an authenticated Socket scan."
+shell = "npm ci && python scripts/run_socket_scan.py"
 
 [tool.poe.tasks.precommit]
 help = "Run pre-commit hooks across the repository."

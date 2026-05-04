@@ -47,8 +47,14 @@ These variables are integration-test specific. They do not change the CLI module
 
 GitHub Actions runs three jobs:
 
-- `unit`: formatting, linting, typing, actionlint, unit tests, coverage validation, pre-commit, and Safety.
+- `unit`: formatting, linting, typing, actionlint, unit tests, coverage validation, and pre-commit.
 - `integration`: live OpenAI integration tests through `uv run poe check-integration`.
 - `validate`: depends on `unit` and `integration` and succeeds only when both jobs succeeded.
 
-The `unit` and `integration` jobs run in parallel. The `validate` job is the aggregate status check.
+The `unit` and `integration` jobs run in parallel. The `validate` job is the
+aggregate GitHub Actions status check.
+
+Socket's GitHub App also posts `Socket Security: Pull Request Alerts` and
+`Socket Security: Project Report` checks. The repository ruleset requires those
+Socket App checks directly, so the workflow does not define a duplicate Socket
+Actions job.

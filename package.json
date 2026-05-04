@@ -1,0 +1,7 @@
+{
+  "name": "openai-tests",
+  "private": true,
+  "devDependencies": {
+    "socket": "1.1.91"
+  }
+}
