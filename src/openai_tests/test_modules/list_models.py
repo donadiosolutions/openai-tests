@@ -129,7 +129,8 @@ def validate_models_response_schema(response_json: Any | None) -> str | None:
       return f"Expected {path}.id to be a non-empty string."
     if item_dict.get("object") != "model":
       return f'Expected {path}.object to be "model".'
-    if not isinstance(item_dict.get("created"), int):
+    created = item_dict.get("created")
+    if type(created) is not int:
       return f"Expected {path}.created to be an integer."
     owned_by = item_dict.get("owned_by")
     if not isinstance(owned_by, str) or not owned_by.strip():

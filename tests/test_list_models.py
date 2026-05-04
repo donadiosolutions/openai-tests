@@ -117,6 +117,10 @@ def test_validate_models_response_schema_accepts_valid_and_empty_lists() -> None
       "Expected response.data[0].created to be an integer.",
     ),
     (
+      {"object": "list", "data": [{"id": "gpt", "object": "model", "created": True, "owned_by": "openai"}]},
+      "Expected response.data[0].created to be an integer.",
+    ),
+    (
       {"object": "list", "data": [{"id": "gpt", "object": "model", "created": 1, "owned_by": None}]},
       "Expected response.data[0].owned_by to be a non-empty string.",
     ),
