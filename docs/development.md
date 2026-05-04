@@ -19,6 +19,7 @@ Common endpoint-test behavior lives in `src/openai_tests/test_modules/_shared.py
 - `EndpointExecutionResult`: endpoint-level result data used by printers.
 - JSON parsing helpers with `@file` support.
 - optional-value pruning for request payloads.
+- GET request sending with HTTP and URL error capture.
 - JSON request sending with HTTP and URL error capture.
 - base URL normalization.
 - chat-completions text extraction.

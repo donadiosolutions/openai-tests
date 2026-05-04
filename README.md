@@ -35,7 +35,14 @@ uv run openai-tests asr-simple \
   --transcriptions-model gpt-4o-transcribe
 ```
 
-Both commands read the API key from `OPENAI_API_KEY` or `OPENAI_TESTS_API_KEY` unless `--api-key` is provided.
+List available models and validate the models-list response schema:
+
+```bash
+uv run openai-tests list-models \
+  --base-url https://api.openai.com
+```
+
+These commands read the API key from `OPENAI_API_KEY` or `OPENAI_TESTS_API_KEY` unless `--api-key` is provided.
 
 Run the live integration suite against OpenAI:
 
@@ -53,4 +60,5 @@ For integration tests, `OPENAI_API_KEY` is loaded from `.env` first when that fi
 - [Live OpenAI integration tests](docs/integration.md)
 - [text-simple module](docs/text-simple.md)
 - [asr-simple module](docs/asr-simple.md)
+- [list-models module](docs/list-models.md)
 - [Development and verification](docs/development.md)

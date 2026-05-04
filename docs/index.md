@@ -12,6 +12,7 @@ surfaces, runs those requests against a target base URL, and reports whether the
 - [text-simple module](text-simple.md): the text-generation compatibility check for `/v1/chat/completions` and `/v1/responses`.
 - [asr-simple module](asr-simple.md): the speech-recognition compatibility check for `/v1/chat/completions` and
   `/v1/audio/transcriptions`.
+- [list-models module](list-models.md): the models-listing compatibility check for `GET /v1/models`.
 - [Development and verification](development.md): module architecture, shared utilities, adding modules, required checks, and
   repository quality gates.
 
@@ -23,6 +24,9 @@ text and warns when the responses endpoint echoes selected parameters differentl
 `asr-simple` creates or reuses a short audio fixture, transcribes it through both chat completions and audio transcriptions, verifies
 that enough expected words are present, and warns when returned metadata suggests parameters changed in transit.
 
+`list-models` lists every available model through `GET /v1/models` and verifies the response shape against the official
+models-list schema.
+
 ## Source Layout
 
 - `src/openai_tests/cli.py`: builds the top-level CLI and registers module subcommands.
@@ -30,6 +34,7 @@ that enough expected words are present, and warns when returned metadata suggest
 - `src/openai_tests/core.py`: defines the `EndpointTestModule` interface.
 - `src/openai_tests/test_modules/text_simple.py`: implements `text-simple`.
 - `src/openai_tests/test_modules/asr_simple.py`: implements `asr-simple`.
+- `src/openai_tests/test_modules/list_models.py`: implements `list-models`.
 - `src/openai_tests/test_modules/_shared.py`: shared HTTP, JSON, output formatting, status, warning, and parsing helpers.
 - `tests/`: isolated unit tests for the CLI, module registry, shared behavior, and endpoint modules.
 - `tests/integration/`: live OpenAI integration tests that exercise the implemented modules against `https://api.openai.com`.
