@@ -1,5 +1,8 @@
 # openai-tests
 
+[![tests](https://img.shields.io/github/actions/workflow/status/donadiosolutions/openai-tests/ci.yml?branch=main&label=tests&logo=github)](https://github.com/donadiosolutions/openai-tests/actions/workflows/ci.yml)
+[![code quality](https://img.shields.io/github/actions/workflow/status/donadiosolutions/openai-tests/github-code-scanning/codeql?branch=main&label=code%20quality&logo=github)](https://github.com/donadiosolutions/openai-tests/actions/workflows/github-code-scanning/codeql)
+[![socket](https://img.shields.io/github/check-runs/donadiosolutions/openai-tests/main?nameFilter=Socket%20Security%3A%20Project%20Report&label=socket)](https://github.com/donadiosolutions/openai-tests/commits/main)
 [![codecov](https://codecov.io/gh/donadiosolutions/openai-tests/graph/badge.svg)](https://codecov.io/gh/donadiosolutions/openai-tests)
 
 `openai-tests` is a small CLI for probing OpenAI-compatible endpoints with focused compatibility checks. Each test module sends a
