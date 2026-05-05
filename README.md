@@ -19,28 +19,41 @@ OpenAI-compatible deployment more than once, this gives you repeatable smoke tes
 ## Quickstart
 
 ```bash
-git clone https://github.com/donadiosolutions/openai-tests.git
-cd openai-tests
-uv sync --all-groups
+pipx run openai-tests text-simple --help
 ```
 
 Run the fastest useful check against OpenAI:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-uv run openai-tests text-simple --model gpt-4.1-mini
+pipx run openai-tests text-simple --model gpt-4.1-mini
 ```
 
 Or point the same check at any compatible endpoint:
 
 ```bash
 export OPENAI_TESTS_API_KEY="your-token"
-uv run openai-tests text-simple \
+pipx run openai-tests text-simple \
   --base-url https://your-openai-compatible-service.example \
   --model your-model
 ```
 
 Base URLs may include `/v1` or omit it. Both `https://example.test` and `https://example.test/v1` work.
+
+If you plan to use the tool repeatedly, install it once instead:
+
+```bash
+pipx install openai-tests
+openai-tests text-simple --model gpt-4.1-mini
+```
+
+If you want to hack on the project itself, clone the repository and use the development environment:
+
+```bash
+git clone https://github.com/donadiosolutions/openai-tests.git
+cd openai-tests
+uv sync --all-groups
+```
 
 > [!IMPORTANT]
 > **Trust surface:** endpoint tests read API keys from CLI flags or environment variables, send HTTP requests only to the configured
@@ -53,7 +66,7 @@ Base URLs may include `/v1` or omit it. Both `https://example.test` and `https:/
 ## See It Work
 
 ```bash
-$ uv run openai-tests text-simple --model gpt-4.1-mini
+$ pipx run openai-tests text-simple --model gpt-4.1-mini
 /v1/chat/completions: PASSED
 Question: What is the capital of France?
 Response: Paris is the capital of France.
@@ -72,7 +85,7 @@ parameters differently.
 When you need to inspect the actual payloads, add `--verbose`:
 
 ```bash
-uv run openai-tests text-simple \
+pipx run openai-tests text-simple \
   --base-url https://your-openai-compatible-service.example \
   --model your-model \
   --verbose
@@ -97,7 +110,7 @@ same request shape my OpenAI client will send, and can I trust the response shap
 ### List available models
 
 ```bash
-uv run openai-tests list-models \
+pipx run openai-tests list-models \
   --base-url https://api.openai.com
 ```
 
@@ -116,7 +129,7 @@ Overall: PASSED
 ### Compare chat completions and responses
 
 ```bash
-uv run openai-tests text-simple \
+pipx run openai-tests text-simple \
   --base-url https://api.openai.com \
   --model gpt-4.1-mini
 ```
@@ -124,7 +137,7 @@ uv run openai-tests text-simple \
 Use separate models when a provider routes the two APIs differently:
 
 ```bash
-uv run openai-tests text-simple \
+pipx run openai-tests text-simple \
   --model gpt-4.1-mini \
   --responses-model gpt-4.1
 ```
@@ -132,7 +145,7 @@ uv run openai-tests text-simple \
 ### Test speech recognition
 
 ```bash
-uv run openai-tests asr-simple \
+pipx run openai-tests asr-simple \
   --base-url https://api.openai.com \
   --model gpt-4o-audio-preview
 ```
@@ -150,7 +163,7 @@ By default, `asr-simple` sends two checked-in MP3 fixtures:
 To test your own fixture:
 
 ```bash
-uv run openai-tests asr-simple \
+pipx run openai-tests asr-simple \
   --audio-file ./speech.wav \
   --audio-format wav \
   --expected-transcript \
@@ -160,7 +173,7 @@ uv run openai-tests asr-simple \
 To synthesize custom spoken text on demand with `espeak-ng`, omit `--audio-file` and provide only the transcript text:
 
 ```bash
-uv run openai-tests asr-simple \
+pipx run openai-tests asr-simple \
   --expected-transcript "Please transcribe this sentence exactly."
 ```
 
@@ -169,7 +182,7 @@ uv run openai-tests asr-simple \
 Optional API parameters stay unset until you pass them. JSON values can be inline or loaded from a file with `@path`.
 
 ```bash
-uv run openai-tests text-simple \
+pipx run openai-tests text-simple \
   --responses-metadata-json '{"suite":"compatibility-smoke"}' \
   --responses-temperature 0
 ```
@@ -177,8 +190,8 @@ uv run openai-tests text-simple \
 Boolean parameters use paired flags, so you can distinguish "unset" from explicit true or false:
 
 ```bash
-uv run openai-tests text-simple --responses-store
-uv run openai-tests text-simple --no-responses-store
+pipx run openai-tests text-simple --responses-store
+pipx run openai-tests text-simple --no-responses-store
 ```
 
 ## Status Labels
