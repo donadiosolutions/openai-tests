@@ -3,8 +3,7 @@
   "extends": [
     "config:best-practices",
     ":dependencyDashboard",
-    ":prHourlyLimitNone",
-    ":pinDigests"
+    ":prHourlyLimitNone"
   ],
   "dependencyDashboard": true,
   "dependencyDashboardLabels": [
