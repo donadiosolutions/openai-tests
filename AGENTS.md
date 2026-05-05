@@ -8,6 +8,7 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 
 - keep an `AGENTS.md` up to date whenever repository changes invalidate or materially change its guidance
 - never modify this `Invariants` section unless explicitly instructed by a human
+- never include internal URLs, internal hostnames, or private endpoints in PRs, review comments, commit messages, code, docs, or examples; use public placeholders such as `https://example.com` instead
 - obey the `AGENTS.md` nearest to the file being modified
 - always write or update tests before writing application code for any behavior change, bug fix, feature, or executable refactor
 - verify that new or changed tests fail for the expected reason before changing application code
@@ -26,6 +27,7 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 - Use `uv` for Python dependency and environment management. Do not use `pip`, `python -m venv`, Poetry, or Pipenv in this repository.
 - Let `pyenv` manage the interpreter version through `.python-version`.
 - Prefer `uv run poe <task>` for routine workflows instead of ad-hoc command sequences.
+- Publish to PyPI through `.github/workflows/publish-pypi.yml`; it is designed for trusted publishing from a non-draft GitHub Release.
 - Future endpoint test modules belong under `src/openai_tests/test_modules/`.
 - Register future endpoint test modules in `src/openai_tests/registry.py` before wiring them into the CLI.
 - Read the relevant implementation and tests before changing behavior.

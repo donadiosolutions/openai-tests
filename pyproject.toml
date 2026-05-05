@@ -9,7 +9,19 @@ description = "Quick CLI to test OpenAI-compatible API endpoints."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.13"
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/donadiosolutions/openai-tests"
+Repository = "https://github.com/donadiosolutions/openai-tests"
+Issues = "https://github.com/donadiosolutions/openai-tests/issues"
 
 [project.scripts]
 openai-tests = "openai_tests.cli:main"
