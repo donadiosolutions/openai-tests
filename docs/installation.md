@@ -8,8 +8,9 @@ The repository expects these tools:
 - `uv`
 - Python `3.13.3`, managed through `.python-version`
 
-The `asr-simple` module also needs `espeak-ng` when it synthesizes its default audio fixture. If `espeak-ng` is not installed, pass an
-existing audio file with `--audio-file`.
+The `asr-simple` module does not need `espeak-ng` for its default bundled MP3
+fixtures. `espeak-ng` is only needed when you want the CLI to synthesize custom
+written text by passing `--expected-transcript` without `--audio-file`.
 
 ## Bootstrap
 
@@ -58,8 +59,8 @@ produce endpoint URLs under `/v1/...`.
 `text-simple` uses `--model`, `OPENAI_MODEL`, `OPENAI_TESTS_MODEL`, or `gpt-4.1-mini`.
 
 `asr-simple` uses `--model`, `OPENAI_MODEL`, `OPENAI_TESTS_MODEL`, or `gpt-4o-audio-preview` for chat completions. It uses
-`--transcriptions-model`, `OPENAI_TRANSCRIPTIONS_MODEL`, `OPENAI_TESTS_TRANSCRIPTIONS_MODEL`, or `gpt-4o-transcribe` for audio
-transcriptions.
+`--transcriptions-model`, `OPENAI_TRANSCRIPTIONS_MODEL`, or `OPENAI_TESTS_TRANSCRIPTIONS_MODEL` for audio transcriptions when those are
+set; otherwise it reuses the resolved `--model` value.
 
 ## Local Verification
 

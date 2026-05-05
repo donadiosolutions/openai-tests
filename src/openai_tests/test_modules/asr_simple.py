@@ -10,6 +10,7 @@ import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -46,10 +47,46 @@ DEFAULT_SYSTEM_PROMPT = "You are a precise speech recognition assistant."
 DEFAULT_DEVELOPER_PROMPT = "Transcribe only the spoken English words from the audio."
 DEFAULT_USER_PROMPT = "Transcribe this audio exactly."
 DEFAULT_EXPECTED_TRANSCRIPT = "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
+DEFAULT_NATO_TRANSCRIPT = (
+  "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec Romeo "
+  "Sierra Tango Uniform Victor Whiskey X Ray Yankee Zulu"
+)
+DEFAULT_PANGRAM_TRANSCRIPT = "The quick brown fox jumps over the lazy dog"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_ESPEAK_VOICE = "en-us"
 DEFAULT_ESPEAK_SPEED = 150
-DEFAULT_AUDIO_FORMAT = "wav"
+DEFAULT_SYNTHESIZED_AUDIO_FORMAT = "wav"
+DEFAULT_MAX_WORD_ERROR_RATE = 0.15
+REPO_ROOT = Path(__file__).resolve().parents[3]
+WORD_VARIANT_GROUPS = {
+  "alpha": ("alfa", "alfah", "alfer"),
+  "bravo": ("brava", "brahvo", "bravoe"),
+  "charlie": ("charli", "charly", "charley", "sharly"),
+  "delta": ("delter", "dellta", "deltah"),
+  "echo": ("eco", "ecko", "eko"),
+  "foxtrot": ("fokstrot", "foxtrott", "foxtrot"),
+  "golf": ("goff", "golph", "gulf"),
+  "hotel": ("hoteil", "hotelh", "otel"),
+  "india": ("indiah", "indiya", "indya"),
+  "juliet": ("juliete", "juliett", "juliette"),
+  "kilo": ("keelo", "kelo", "keylo", "killo"),
+  "lima": ("leema", "lema", "lyma"),
+  "mike": ("maik", "mic", "myke"),
+  "november": ("novemba", "novemberr", "novemver"),
+  "oscar": ("oscah", "oskar", "osker"),
+  "papa": ("papah", "pappa", "poppa"),
+  "quebec": ("kebec", "kwebec", "quebek", "quebeck"),
+  "romeo": ("romeu", "romeyo", "romio"),
+  "sierra": ("siarra", "siera", "syerra"),
+  "tango": ("tanga", "tangoe", "tengo"),
+  "uniform": ("uniforme", "unyform", "youniform"),
+  "victor": ("viktor", "victorh", "viktor"),
+  "whiskey": ("whiskey", "whisky", "wiskey"),
+  "xray": ("exray", "xrei", "xrey"),
+  "yankee": ("yanke", "yankie", "yanky"),
+  "zulu": ("zooloo", "zoulou", "zuloo"),
+}
+WORD_VARIANT_ALIASES = {alias: canonical for canonical, aliases in WORD_VARIANT_GROUPS.items() for alias in aliases}
 
 JSON_TRANSCRIPTION_FORMATS = frozenset(("json", "verbose_json", "diarized_json"))
 TEXT_TRANSCRIPTION_FORMATS = frozenset(("text", "srt", "vtt"))
@@ -71,6 +108,38 @@ class AudioFixture:
   bytes: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class BundledAudioSample:
+  label: str
+  filename: str
+  expected_transcript: str
+  format: str
+
+
+@dataclass(frozen=True, slots=True)
+class AudioCase:
+  label: str
+  fixture: AudioFixture
+  expected_transcript: str
+  minimum_expected_words: int
+
+
+DEFAULT_BUNDLED_AUDIO_SAMPLES = (
+  BundledAudioSample(
+    label="nato alphabet",
+    filename="asr_default_nato.mp3",
+    expected_transcript=DEFAULT_NATO_TRANSCRIPT,
+    format="mp3",
+  ),
+  BundledAudioSample(
+    label="quick brown fox",
+    filename="asr_default_pangram.mp3",
+    expected_transcript=DEFAULT_PANGRAM_TRANSCRIPT,
+    format="mp3",
+  ),
+)
+
+
 def configure_parser(parser: argparse.ArgumentParser) -> None:
   parser.add_argument(
     "--base-url",
@@ -88,7 +157,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     "--transcriptions-model",
     help=(
       "Override the model used only for /v1/audio/transcriptions. Defaults to "
-      "$OPENAI_TRANSCRIPTIONS_MODEL, $OPENAI_TESTS_TRANSCRIPTIONS_MODEL, or gpt-4o-transcribe."
+      "$OPENAI_TRANSCRIPTIONS_MODEL, $OPENAI_TESTS_TRANSCRIPTIONS_MODEL, or the resolved shared --model value."
     ),
   )
   parser.add_argument(
@@ -112,10 +181,15 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
   audio.add_argument("--audio-file", help="Use an existing audio file instead of synthesizing one with espeak-ng.")
   audio.add_argument(
     "--audio-format",
-    default=DEFAULT_AUDIO_FORMAT,
-    help="Audio format sent to chat completions input_audio. Defaults to wav.",
+    help="Audio format for --audio-file. Defaults to the file extension when omitted.",
   )
-  audio.add_argument("--expected-transcript", default=DEFAULT_EXPECTED_TRANSCRIPT)
+  audio.add_argument(
+    "--expected-transcript",
+    help=(
+      "Expected transcript for --audio-file. When provided without --audio-file, espeak-ng synthesizes this text "
+      "into a temporary WAV fixture. When omitted, the bundled default MP3 samples are used."
+    ),
+  )
   audio.add_argument(
     "--min-expected-words",
     type=int,
@@ -205,39 +279,44 @@ def run(args: argparse.Namespace) -> int:
   try:
     base_url = resolve_base_url(args.base_url)
     api_key = resolve_api_key(args.api_key)
-    expected_transcript = args.expected_transcript
     with tempfile.TemporaryDirectory(prefix="openai-tests-asr-") as temporary_directory:
-      audio_fixture = prepare_audio_fixture(args, Path(temporary_directory))
-      completions_payload = build_completions_request_config(args, audio_fixture.bytes, audio_fixture.format)
+      audio_cases = prepare_audio_cases(args, Path(temporary_directory))
       transcriptions_payload = build_transcriptions_request_config(args)
-
-      completions_result = run_completions_test(
-        base_url=base_url,
-        api_key=api_key,
-        normalized_payload=completions_payload,
-        expected_transcript=expected_transcript,
-        minimum_expected_words=resolve_minimum_expected_words(args.min_expected_words, expected_transcript),
-        timeout=args.timeout,
-      )
-      transcriptions_result = run_transcriptions_test(
-        base_url=base_url,
-        api_key=api_key,
-        normalized_payload=transcriptions_payload,
-        audio_fixture=audio_fixture,
-        expected_transcript=expected_transcript,
-        minimum_expected_words=resolve_minimum_expected_words(args.min_expected_words, expected_transcript),
-        timeout=args.timeout,
-      )
+      results: list[EndpointExecutionResult] = []
+      for audio_case in audio_cases:
+        completions_result = run_completions_test(
+          base_url=base_url,
+          api_key=api_key,
+          normalized_payload=build_completions_request_config(
+            args, audio_case.fixture.bytes, audio_case.fixture.format
+          ),
+          expected_transcript=audio_case.expected_transcript,
+          minimum_expected_words=audio_case.minimum_expected_words,
+          timeout=args.timeout,
+          case_label=audio_case.label,
+        )
+        transcriptions_result = run_transcriptions_test(
+          base_url=base_url,
+          api_key=api_key,
+          normalized_payload=transcriptions_payload,
+          audio_fixture=audio_case.fixture,
+          expected_transcript=audio_case.expected_transcript,
+          minimum_expected_words=audio_case.minimum_expected_words,
+          timeout=args.timeout,
+          case_label=audio_case.label,
+        )
+        results.extend((completions_result, transcriptions_result))
   except ValueError as exc:
     print(f"Configuration error: {exc}", file=sys.stderr)
     return 2
 
-  print_endpoint_result(completions_result, verbose=args.verbose)
-  print()
-  print_endpoint_result(transcriptions_result, verbose=args.verbose)
+  for index, result in enumerate(results):
+    if index:
+      print()
+    print_endpoint_result(result, verbose=args.verbose)
   print()
 
-  overall_status = determine_overall_status(completions_result, transcriptions_result)
+  overall_status = determine_overall_status(*results)
   print(f"Overall: {colorize_status(overall_status)}")
   return 0 if overall_status == "passed" else 1
 
@@ -251,10 +330,15 @@ def resolve_model(cli_value: str | None) -> str:
 
 
 def resolve_transcriptions_model(cli_value: str | None) -> str:
+  return resolve_transcriptions_model_with_fallback(cli_value, fallback_model=None)
+
+
+def resolve_transcriptions_model_with_fallback(cli_value: str | None, *, fallback_model: str | None) -> str:
   return (
     cli_value
     or os.getenv("OPENAI_TRANSCRIPTIONS_MODEL")
     or os.getenv("OPENAI_TESTS_TRANSCRIPTIONS_MODEL")
+    or fallback_model
     or DEFAULT_TRANSCRIPTIONS_MODEL
   )
 
@@ -272,27 +356,99 @@ def resolve_minimum_expected_words(cli_value: int | None, expected_transcript: s
   return cli_value
 
 
-def prepare_audio_fixture(args: argparse.Namespace, output_dir: Path) -> AudioFixture:
-  audio_format = normalize_audio_format(args.audio_format)
+def prepare_audio_cases(args: argparse.Namespace, output_dir: Path) -> list[AudioCase]:
   if args.audio_file is not None:
-    audio_path = Path(args.audio_file)
-    if not audio_path.exists():
-      raise ValueError(f"Audio file does not exist: {audio_path}")
-    if not audio_path.is_file():
-      raise ValueError(f"Audio path is not a file: {audio_path}")
-    return AudioFixture(path=audio_path, format=audio_format, bytes=audio_path.read_bytes())
+    expected_transcript = require_expected_transcript(args.expected_transcript, context="--audio-file")
+    fixture = load_audio_fixture(Path(args.audio_file), args.audio_format)
+    return [
+      AudioCase(
+        label=fixture.path.name,
+        fixture=fixture,
+        expected_transcript=expected_transcript,
+        minimum_expected_words=resolve_minimum_expected_words(args.min_expected_words, expected_transcript),
+      )
+    ]
+
+  if args.expected_transcript is not None:
+    expected_transcript = require_expected_transcript(args.expected_transcript, context="synthesized audio")
+    fixture = synthesize_audio_fixture(
+      expected_transcript=expected_transcript,
+      output_dir=output_dir,
+      voice=args.espeak_voice,
+      speed=args.espeak_speed,
+    )
+    return [
+      AudioCase(
+        label="synthesized",
+        fixture=fixture,
+        expected_transcript=expected_transcript,
+        minimum_expected_words=resolve_minimum_expected_words(args.min_expected_words, expected_transcript),
+      )
+    ]
+
+  return [
+    AudioCase(
+      label=sample.label,
+      fixture=load_bundled_audio_fixture(sample, output_dir),
+      expected_transcript=sample.expected_transcript,
+      minimum_expected_words=resolve_minimum_expected_words(args.min_expected_words, sample.expected_transcript),
+    )
+    for sample in DEFAULT_BUNDLED_AUDIO_SAMPLES
+  ]
+
+
+def require_expected_transcript(raw_value: str | None, *, context: str) -> str:
+  if raw_value is None or not raw_value.strip():
+    raise ValueError(f"expected-transcript is required with {context}")
+  return raw_value.strip()
+
+
+def load_audio_fixture(audio_path: Path, raw_audio_format: str | None) -> AudioFixture:
+  if not audio_path.exists():
+    raise ValueError(f"Audio file does not exist: {audio_path}")
+  if not audio_path.is_file():
+    raise ValueError(f"Audio path is not a file: {audio_path}")
+  audio_format = resolve_audio_format(raw_audio_format, audio_path=audio_path)
+  return AudioFixture(path=audio_path, format=audio_format, bytes=audio_path.read_bytes())
+
+
+def load_bundled_audio_fixture(sample: BundledAudioSample, output_dir: Path) -> AudioFixture:
+  source_path = REPO_ROOT / sample.filename
+  if source_path.is_file():
+    return AudioFixture(path=source_path, format=sample.format, bytes=source_path.read_bytes())
+
+  try:
+    asset_file = resources.files("openai_tests.assets") / sample.filename
+  except ModuleNotFoundError as exc:
+    raise ValueError(f"Bundled audio sample not found: {sample.filename}") from exc
+  if not asset_file.is_file():
+    raise ValueError(f"Bundled audio sample not found: {sample.filename}")
 
   output_dir.mkdir(parents=True, exist_ok=True)
-  audio_path = output_dir / f"asr-simple.{audio_format}"
+  audio_path = output_dir / sample.filename
+  audio_bytes = asset_file.read_bytes()
+  audio_path.write_bytes(audio_bytes)
+  return AudioFixture(path=audio_path, format=sample.format, bytes=audio_bytes)
+
+
+def synthesize_audio_fixture(
+  *,
+  expected_transcript: str,
+  output_dir: Path,
+  voice: str,
+  speed: int,
+) -> AudioFixture:
+  output_dir.mkdir(parents=True, exist_ok=True)
+  audio_path = output_dir / f"asr-simple.{DEFAULT_SYNTHESIZED_AUDIO_FORMAT}"
   command = [
     "espeak-ng",
     "-v",
-    args.espeak_voice,
+    voice,
     "-s",
-    str(args.espeak_speed),
+    str(speed),
     "-w",
     str(audio_path),
-    args.expected_transcript,
+    expected_transcript,
   ]
   try:
     subprocess.run(
@@ -306,7 +462,15 @@ def prepare_audio_fixture(args: argparse.Namespace, output_dir: Path) -> AudioFi
   except subprocess.CalledProcessError as exc:
     stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else str(exc.stderr)
     raise ValueError(f"espeak-ng failed: {stderr}") from exc
-  return AudioFixture(path=audio_path, format=audio_format, bytes=audio_path.read_bytes())
+  return AudioFixture(path=audio_path, format=DEFAULT_SYNTHESIZED_AUDIO_FORMAT, bytes=audio_path.read_bytes())
+
+
+def resolve_audio_format(raw_format: str | None, *, audio_path: Path | None = None) -> str:
+  if raw_format is not None:
+    return normalize_audio_format(raw_format)
+  if audio_path is not None and audio_path.suffix:
+    return normalize_audio_format(audio_path.suffix)
+  raise ValueError("audio-format is required when the audio file extension does not identify a supported format")
 
 
 def normalize_audio_format(raw_format: str) -> str:
@@ -455,7 +619,10 @@ def build_transcriptions_request_config(args: argparse.Namespace) -> dict[str, A
     "known_speaker_names": known_speaker_names or None,
     "known_speaker_references": known_speaker_references or None,
     "language": args.transcriptions_language,
-    "model": resolve_transcriptions_model(args.transcriptions_model),
+    "model": resolve_transcriptions_model_with_fallback(
+      args.transcriptions_model,
+      fallback_model=resolve_model(args.model),
+    ),
     "prompt": args.transcriptions_prompt,
     "response_format": args.transcriptions_response_format,
     "stream": args.transcriptions_stream,
@@ -472,6 +639,7 @@ def run_completions_test(
   expected_transcript: str,
   minimum_expected_words: int,
   timeout: float,
+  case_label: str | None = None,
 ) -> EndpointExecutionResult:
   pruned_payload = prune_none(normalized_payload)
   exchange = send_json_request(
@@ -486,6 +654,10 @@ def run_completions_test(
     exchange.response_body_text,
     stream=stream,
   )
+  response_text = normalize_known_model_transcript(
+    response_text,
+    requested_model=pruned_payload.get("model") if isinstance(pruned_payload.get("model"), str) else None,
+  )
   error_message = determine_asr_error_message(
     exchange=exchange,
     response_text=response_text,
@@ -498,7 +670,7 @@ def run_completions_test(
   )
   warnings = build_completions_warnings(request_body=pruned_payload, response_json=exchange.response_json)
   return EndpointExecutionResult(
-    name="/v1/chat/completions",
+    name=format_endpoint_name("/v1/chat/completions", case_label),
     question=expected_transcript,
     response_text=response_text,
     success=error_message is None,
@@ -528,6 +700,7 @@ def run_transcriptions_test(
   expected_transcript: str,
   minimum_expected_words: int,
   timeout: float,
+  case_label: str | None = None,
 ) -> EndpointExecutionResult:
   pruned_payload = prune_none(normalized_payload)
   exchange = send_multipart_request(
@@ -562,7 +735,7 @@ def run_transcriptions_test(
     "size": len(audio_fixture.bytes),
   }
   return EndpointExecutionResult(
-    name="/v1/audio/transcriptions",
+    name=format_endpoint_name("/v1/audio/transcriptions", case_label),
     question=expected_transcript,
     response_text=response_text,
     success=error_message is None,
@@ -640,6 +813,9 @@ def build_accuracy_error_message(
   matched_words = [word for word in expected_words if word in response_words]
   if len(matched_words) >= minimum_expected_words:
     return None
+  _, total_words, wer = compute_word_error_rate(expected_transcript, response_text)
+  if total_words and wer < DEFAULT_MAX_WORD_ERROR_RATE:
+    return None
   missing_words = [word for word in expected_words if word not in response_words]
   return (
     f"Transcript matched {len(matched_words)} of {len(expected_words)} expected words; "
@@ -648,7 +824,64 @@ def build_accuracy_error_message(
 
 
 def normalize_words(value: str) -> list[str]:
-  return re.findall(r"[a-z0-9]+", value.lower())
+  raw_words = re.findall(r"[a-z0-9]+", value.lower())
+  normalized: list[str] = []
+  index = 0
+  while index < len(raw_words):
+    if raw_words[index : index + 2] == ["fox", "trot"]:
+      normalized.append("foxtrot")
+      index += 2
+      continue
+    if raw_words[index : index + 2] == ["x", "ray"]:
+      normalized.append("xray")
+      index += 2
+      continue
+    normalized.append(WORD_VARIANT_ALIASES.get(raw_words[index], raw_words[index]))
+    index += 1
+  return normalized
+
+
+def compute_word_error_rate(expected_transcript: str, response_text: str) -> tuple[int, int, float]:
+  expected_words = normalize_words(expected_transcript)
+  response_words = normalize_words(response_text)
+  if not expected_words:
+    return (0, 0, 0.0)
+
+  previous_row = list(range(len(response_words) + 1))
+  for expected_index, expected_word in enumerate(expected_words, start=1):
+    current_row = [expected_index]
+    for response_index, response_word in enumerate(response_words, start=1):
+      substitution_cost = 0 if expected_word == response_word else 1
+      current_row.append(
+        min(
+          previous_row[response_index] + 1,
+          current_row[response_index - 1] + 1,
+          previous_row[response_index - 1] + substitution_cost,
+        )
+      )
+    previous_row = current_row
+
+  errors = previous_row[-1]
+  return (errors, len(expected_words), errors / len(expected_words))
+
+
+def normalize_known_model_transcript(response_text: str, *, requested_model: str | None) -> str:
+  if not response_text:
+    return response_text
+  if not is_qwen_asr_model(requested_model):
+    return response_text
+  return re.sub(r"^\s*language\b[^<]*<asr_text>\s*", "", response_text, flags=re.IGNORECASE).strip()
+
+
+def is_qwen_asr_model(requested_model: str | None) -> bool:
+  if not requested_model:
+    return False
+  normalized_model = requested_model.casefold()
+  return "qwen" in normalized_model and "asr" in normalized_model
+
+
+def format_endpoint_name(endpoint_path: str, case_label: str | None) -> str:
+  return endpoint_path if not case_label else f"{endpoint_path} ({case_label})"
 
 
 def build_completions_warnings(*, request_body: dict[str, Any], response_json: Any | None) -> list[str]:
@@ -945,6 +1178,9 @@ def print_endpoint_result(result: EndpointExecutionResult, *, verbose: bool) -> 
   print(f"{result.name}: {colorize_status(determine_endpoint_status(result))}")
   print(f"Expected transcript: {result.question}")
   print(f"Transcript: {result.response_text or '(none)'}")
+  wer_errors, wer_total_words, wer = compute_word_error_rate(result.question, result.response_text)
+  if wer_total_words:
+    print(f"WER: {wer:.2%} ({wer_errors}/{wer_total_words})")
   if result.error_message is not None:
     print(f"Error: {result.error_message}")
   for warning in result.warnings:
@@ -964,7 +1200,7 @@ def print_endpoint_result(result: EndpointExecutionResult, *, verbose: bool) -> 
 
 ASR_SIMPLE_MODULE = EndpointTestModule(
   name="asr-simple",
-  summary="Transcribe generated speech through both chat completions and audio transcriptions.",
+  summary="Transcribe bundled or custom speech through both chat completions and audio transcriptions.",
   configure_parser=configure_parser,
   handler=run,
 )

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import subprocess
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
 from urllib import error, request
 
 import pytest
@@ -156,17 +158,88 @@ def test_build_transcriptions_request_config_uses_defaults_and_overrides() -> No
   }
 
 
-def test_prepare_audio_fixture_can_use_existing_file(tmp_path: Path) -> None:
+def test_build_transcriptions_request_config_uses_shared_model_when_specific_model_is_omitted() -> None:
+  args = build_args(model="shared-asr-model", transcriptions_model=None)
+  payload = asr_simple.build_transcriptions_request_config(args)
+  assert payload["model"] == "shared-asr-model"
+
+
+def test_resolve_transcriptions_model_uses_legacy_default_when_no_fallback_is_provided() -> None:
+  assert asr_simple.resolve_transcriptions_model(None) == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
+
+
+def test_prepare_audio_cases_can_use_existing_file(tmp_path: Path) -> None:
   audio_path = tmp_path / "speech.wav"
   audio_path.write_bytes(b"RIFF")
-  args = build_args(audio_file=str(audio_path), audio_format="wav")
-  fixture = asr_simple.prepare_audio_fixture(args, tmp_path)
-  assert fixture.path == audio_path
-  assert fixture.format == "wav"
-  assert fixture.bytes == b"RIFF"
+  args = build_args(audio_file=str(audio_path), audio_format="wav", expected_transcript="Alpha Bravo")
+  cases = asr_simple.prepare_audio_cases(args, tmp_path)
+  assert len(cases) == 1
+  assert cases[0].label == "speech.wav"
+  assert cases[0].expected_transcript == "Alpha Bravo"
+  assert cases[0].fixture.path == audio_path
+  assert cases[0].fixture.format == "wav"
+  assert cases[0].fixture.bytes == b"RIFF"
 
 
-def test_prepare_audio_fixture_synthesizes_espeak_audio(
+def test_prepare_audio_cases_use_repo_samples_by_default(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  monkeypatch.setattr(asr_simple, "REPO_ROOT", tmp_path)
+  (tmp_path / "asr_default_nato.mp3").write_bytes(b"NATO")
+  (tmp_path / "asr_default_pangram.mp3").write_bytes(b"PANGRAM")
+
+  cases = asr_simple.prepare_audio_cases(build_args(), tmp_path)
+
+  assert len(cases) == 2
+  assert [case.label for case in cases] == ["nato alphabet", "quick brown fox"]
+  assert [case.fixture.path.name for case in cases] == ["asr_default_nato.mp3", "asr_default_pangram.mp3"]
+  assert [case.fixture.format for case in cases] == ["mp3", "mp3"]
+  assert cases[0].expected_transcript == (
+    "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec "
+    "Romeo Sierra Tango Uniform Victor Whiskey X Ray Yankee Zulu"
+  )
+  assert cases[1].expected_transcript == "The quick brown fox jumps over the lazy dog"
+
+
+def test_load_bundled_audio_fixture_falls_back_to_packaged_assets(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  asset_root = tmp_path / "assets"
+  asset_root.mkdir()
+  (asset_root / "asr_default_nato.mp3").write_bytes(b"NATO")
+
+  monkeypatch.setattr(asr_simple, "REPO_ROOT", tmp_path / "missing-root")
+  monkeypatch.setattr(asr_simple.resources, "files", lambda package: asset_root)
+
+  fixture = asr_simple.load_bundled_audio_fixture(asr_simple.DEFAULT_BUNDLED_AUDIO_SAMPLES[0], tmp_path / "out")
+  assert fixture.path == tmp_path / "out" / "asr_default_nato.mp3"
+  assert fixture.bytes == b"NATO"
+  assert fixture.format == "mp3"
+
+
+def test_load_bundled_audio_fixture_reports_missing_packaged_asset(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  asset_root = tmp_path / "assets"
+  asset_root.mkdir()
+
+  monkeypatch.setattr(asr_simple, "REPO_ROOT", tmp_path / "missing-root")
+  monkeypatch.setattr(asr_simple.resources, "files", lambda package: asset_root)
+  with pytest.raises(ValueError, match="Bundled audio sample not found"):
+    asr_simple.load_bundled_audio_fixture(asr_simple.DEFAULT_BUNDLED_AUDIO_SAMPLES[0], tmp_path / "out")
+
+  def raise_module_not_found(package: str) -> Path:
+    raise ModuleNotFoundError(package)
+
+  monkeypatch.setattr(asr_simple.resources, "files", raise_module_not_found)
+  with pytest.raises(ValueError, match="Bundled audio sample not found"):
+    asr_simple.load_bundled_audio_fixture(asr_simple.DEFAULT_BUNDLED_AUDIO_SAMPLES[0], tmp_path / "out")
+
+
+def test_prepare_audio_cases_synthesizes_espeak_audio(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
@@ -185,7 +258,7 @@ def test_prepare_audio_fixture_synthesizes_espeak_audio(
       "150",
       "-w",
       str(tmp_path / "asr-simple.wav"),
-      asr_simple.DEFAULT_EXPECTED_TRANSCRIPT,
+      "Alpha Bravo",
     ]
     assert check is True
     assert capture_output is True
@@ -194,22 +267,41 @@ def test_prepare_audio_fixture_synthesizes_espeak_audio(
     return subprocess.CompletedProcess(command, 0, "", "")
 
   monkeypatch.setattr(asr_simple.subprocess, "run", fake_run)
-  fixture = asr_simple.prepare_audio_fixture(build_args(), tmp_path)
-  assert fixture.path == tmp_path / "asr-simple.wav"
-  assert fixture.bytes == b"RIFF"
+  cases = asr_simple.prepare_audio_cases(build_args(expected_transcript="Alpha Bravo"), tmp_path)
+  assert len(cases) == 1
+  assert cases[0].label == "synthesized"
+  assert cases[0].expected_transcript == "Alpha Bravo"
+  assert cases[0].fixture.path == tmp_path / "asr-simple.wav"
+  assert cases[0].fixture.bytes == b"RIFF"
 
 
-def test_prepare_audio_fixture_reports_missing_audio_and_espeak_failures(tmp_path: Path) -> None:
+def test_prepare_audio_cases_report_missing_audio_and_espeak_failures(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match="Audio file does not exist"):
-    asr_simple.prepare_audio_fixture(build_args(audio_file=str(tmp_path / "missing.wav")), tmp_path)
+    asr_simple.prepare_audio_cases(
+      build_args(audio_file=str(tmp_path / "missing.wav"), expected_transcript="Alpha Bravo"),
+      tmp_path,
+    )
 
   directory_path = tmp_path / "directory.wav"
   directory_path.mkdir()
   with pytest.raises(ValueError, match="Audio path is not a file"):
-    asr_simple.prepare_audio_fixture(build_args(audio_file=str(directory_path)), tmp_path)
+    asr_simple.prepare_audio_cases(
+      build_args(audio_file=str(directory_path), expected_transcript="Alpha Bravo"),
+      tmp_path,
+    )
 
+  unsupported_path = tmp_path / "speech.flac"
+  unsupported_path.write_bytes(b"RIFF")
   with pytest.raises(ValueError, match="Unsupported audio format"):
-    asr_simple.prepare_audio_fixture(build_args(audio_file=str(directory_path), audio_format="flac"), tmp_path)
+    asr_simple.prepare_audio_cases(
+      build_args(audio_file=str(unsupported_path), audio_format="flac", expected_transcript="Alpha Bravo"),
+      tmp_path,
+    )
+
+  with pytest.raises(ValueError, match="expected-transcript is required with --audio-file"):
+    asr_simple.prepare_audio_cases(
+      build_args(audio_file=str(tmp_path / "missing.wav"), expected_transcript=None), tmp_path
+    )
 
   def missing_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
     raise FileNotFoundError
@@ -217,16 +309,16 @@ def test_prepare_audio_fixture_reports_missing_audio_and_espeak_failures(tmp_pat
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setattr(asr_simple.subprocess, "run", missing_run)
     with pytest.raises(ValueError, match="espeak-ng was not found"):
-      asr_simple.prepare_audio_fixture(build_args(), tmp_path)
+      asr_simple.prepare_audio_cases(build_args(expected_transcript="Alpha Bravo"), tmp_path)
 
   def fail_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
     raise subprocess.CalledProcessError(1, ["espeak-ng"], stderr="voice missing")
 
-  args = build_args()
+  args = build_args(expected_transcript="Alpha Bravo")
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setattr(asr_simple.subprocess, "run", fail_run)
     with pytest.raises(ValueError, match="espeak-ng failed"):
-      asr_simple.prepare_audio_fixture(args, tmp_path)
+      asr_simple.prepare_audio_cases(args, tmp_path)
 
 
 def test_send_multipart_request_sends_repeated_fields_and_file(
@@ -356,6 +448,102 @@ def test_build_accuracy_error_message_counts_normalized_expected_words() -> None
     asr_simple.resolve_minimum_expected_words(0, "Alpha Bravo")
 
 
+def test_build_accuracy_error_message_accepts_common_asr_word_splits() -> None:
+  assert asr_simple.build_accuracy_error_message("Alpha fox trot xray", "Alpha Foxtrot X Ray", 3) is None
+
+
+def test_build_accuracy_error_message_accepts_low_wer_even_if_one_word_is_missed() -> None:
+  expected = (
+    "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec Romeo "
+    "Sierra Tango Uniform Victor Whiskey X Ray Yankee Zulu"
+  )
+  response = (
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet keelor lima mike november oscar papa quebec romeo "
+    "sierra tango uniform victor whiskey x-ray yankee zulu"
+  )
+  assert asr_simple.build_accuracy_error_message(response, expected, 26) is None
+
+
+def test_build_accuracy_error_message_accepts_common_nato_spelling_variants() -> None:
+  expected = (
+    "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec Romeo "
+    "Sierra Tango Uniform Victor Whiskey X Ray Yankee Zulu"
+  )
+  response = (
+    "alfa bravo charly delta echo foxtrot golf hotel india juliette kelo lima mike november oskar papa quebec "
+    "romeu sierra tango uniforme viktor whisky x-ray yanke zooloo"
+  )
+  assert asr_simple.build_accuracy_error_message(response, expected, 26) is None
+
+
+def test_normalize_words_maps_representative_nato_spelling_variants_to_canonical_forms() -> None:
+  assert asr_simple.normalize_words(
+    "alfa bravo charley delter eko fokstrot gulf otel indya juliette keelo lema mic novemba "
+    "oskar pappa kebec romeu siera tengo uniforme viktor whisky x-ray yankie zooloo"
+  ) == [
+    "alpha",
+    "bravo",
+    "charlie",
+    "delta",
+    "echo",
+    "foxtrot",
+    "golf",
+    "hotel",
+    "india",
+    "juliet",
+    "kilo",
+    "lima",
+    "mike",
+    "november",
+    "oscar",
+    "papa",
+    "quebec",
+    "romeo",
+    "sierra",
+    "tango",
+    "uniform",
+    "victor",
+    "whiskey",
+    "xray",
+    "yankee",
+    "zulu",
+  ]
+
+
+def test_compute_word_error_rate_reports_edit_distance() -> None:
+  errors, total_words, wer = asr_simple.compute_word_error_rate("Alpha Bravo Charlie", "Alpha Bravo")
+  assert errors == 1
+  assert total_words == 3
+  assert wer == pytest.approx(1 / 3)
+
+
+def test_compute_word_error_rate_handles_empty_reference() -> None:
+  assert asr_simple.compute_word_error_rate("", "Alpha Bravo") == (0, 0, 0.0)
+
+
+def test_normalize_known_model_transcript_strips_qwen_asr_wrapper() -> None:
+  assert (
+    asr_simple.normalize_known_model_transcript(
+      "language English<asr_text>Alpha Bravo Charlie",
+      requested_model="Qwen/Qwen3-ASR-1.7B",
+    )
+    == "Alpha Bravo Charlie"
+  )
+
+
+def test_normalize_known_model_transcript_is_model_specific() -> None:
+  raw = "language English<asr_text>Alpha Bravo Charlie"
+  assert asr_simple.normalize_known_model_transcript(raw, requested_model="ibm-granite/granite-speech-4.1-2b") == raw
+  assert asr_simple.normalize_known_model_transcript(raw, requested_model=None) == raw
+  assert asr_simple.normalize_known_model_transcript("", requested_model="Qwen/Qwen3-ASR-1.7B") == ""
+
+
+def test_resolve_audio_format_uses_extension_and_requires_supported_suffix() -> None:
+  assert asr_simple.resolve_audio_format(None, audio_path=Path("speech.mp3")) == "mp3"
+  with pytest.raises(ValueError, match="audio-format is required"):
+    asr_simple.resolve_audio_format(None, audio_path=Path("speech"))
+
+
 def test_validate_response_format_reports_endpoint_specific_errors() -> None:
   exchange = asr_simple.HttpExchange(
     method="POST",
@@ -437,6 +625,35 @@ def test_validate_response_format_reports_endpoint_specific_errors() -> None:
       format_error_message="format error",
     )
     == "format error"
+  )
+  assert (
+    asr_simple.determine_asr_error_message(
+      exchange=asr_simple.HttpExchange(
+        method="POST",
+        url="https://example.com",
+        request_headers={},
+        request_body={},
+        response_status=200,
+        response_headers={"Content-Type": "application/json"},
+        response_body_text=(
+          '{"choices":[{"message":{"content":"alpha bravo charlie delta echo foxtrot golf hotel india juliet '
+          "kelo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey x-ray yankee "
+          'zulu"}}]}'
+        ),
+        response_json={},
+      ),
+      response_text=(
+        "alpha bravo charlie delta echo foxtrot golf hotel india juliet kelo lima mike november oscar papa quebec "
+        "romeo sierra tango uniform victor whiskey x-ray yankee zulu"
+      ),
+      expected_transcript=(
+        "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec "
+        "Romeo Sierra Tango Uniform Victor Whiskey X Ray Yankee Zulu"
+      ),
+      minimum_expected_words=26,
+      format_error_message=None,
+    )
+    is None
   )
 
 
@@ -617,7 +834,7 @@ def test_endpoint_warning_checks_ignore_omitted_optional_fields(
   assert transcriptions_result.partial_success is False
 
 
-def test_run_executes_both_endpoints_and_renders_verbose_output(
+def test_run_executes_all_default_samples_and_renders_verbose_output(
   monkeypatch: pytest.MonkeyPatch,
   capsys: pytest.CaptureFixture[str],
   tmp_path: Path,
@@ -627,9 +844,23 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
   sent_json_payloads: list[tuple[str, dict[str, object]]] = []
   sent_multipart_payloads: list[tuple[str, dict[str, object]]] = []
 
-  def fake_prepare_audio_fixture(args: argparse.Namespace, output_dir: Path) -> asr_simple.AudioFixture:
+  def fake_prepare_audio_cases(args: argparse.Namespace, output_dir: Path) -> list[SimpleNamespace]:
     assert output_dir.exists()
-    return asr_simple.AudioFixture(path=audio_path, format="wav", bytes=b"RIFF")
+    fixture = asr_simple.AudioFixture(path=audio_path, format="mp3", bytes=b"RIFF")
+    return [
+      SimpleNamespace(
+        label="nato alphabet",
+        fixture=fixture,
+        expected_transcript="Alpha Bravo Charlie",
+        minimum_expected_words=3,
+      ),
+      SimpleNamespace(
+        label="quick brown fox",
+        fixture=fixture,
+        expected_transcript="The quick brown fox jumps over the lazy dog",
+        minimum_expected_words=9,
+      ),
+    ]
 
   def fake_send_json_request(
     *, url: str, api_key: str | None, payload: dict[str, object], timeout: float
@@ -637,6 +868,9 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
     assert api_key == "cli-key"
     assert timeout == 12.0
     sent_json_payloads.append((url, payload))
+    transcript = (
+      "Alpha Bravo Charlie" if len(sent_json_payloads) == 1 else "The quick brown fox jumps over the lazy dog"
+    )
     return asr_simple.HttpExchange(
       method="POST",
       url=url,
@@ -644,18 +878,8 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
       request_body=payload,
       response_status=200,
       response_headers={"Content-Type": "application/json"},
-      response_body_text=(
-        '{"choices":[{"message":{"content":"Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"}}]}'
-      ),
-      response_json={
-        "choices": [
-          {
-            "message": {
-              "content": "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet",
-            }
-          }
-        ]
-      },
+      response_body_text=json.dumps({"choices": [{"message": {"content": transcript}}]}),
+      response_json={"choices": [{"message": {"content": transcript}}]},
     )
 
   def fake_send_multipart_request(
@@ -669,9 +893,12 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
   ) -> asr_simple.HttpExchange:
     assert api_key == "cli-key"
     assert file_path == audio_path
-    assert file_format == "wav"
+    assert file_format == "mp3"
     assert timeout == 12.0
     sent_multipart_payloads.append((url, fields))
+    transcript = (
+      "Alpha Bravo Charlie" if len(sent_multipart_payloads) == 1 else "The quick brown fox jumps over the lazy dog"
+    )
     return asr_simple.HttpExchange(
       method="POST",
       url=url,
@@ -679,11 +906,11 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
       request_body=fields,
       response_status=200,
       response_headers={"Content-Type": "application/json"},
-      response_body_text='{"text":"Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"}',
-      response_json={"text": "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"},
+      response_body_text=json.dumps({"text": transcript}),
+      response_json={"text": transcript},
     )
 
-  monkeypatch.setattr(asr_simple, "prepare_audio_fixture", fake_prepare_audio_fixture)
+  monkeypatch.setattr(asr_simple, "prepare_audio_cases", fake_prepare_audio_cases)
   monkeypatch.setattr(asr_simple, "send_json_request", fake_send_json_request)
   monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
   args = build_args(
@@ -696,12 +923,15 @@ def test_run_executes_both_endpoints_and_renders_verbose_output(
   )
   assert asr_simple.run(args) == 0
   captured = capsys.readouterr()
-  assert "/v1/chat/completions:" in captured.out
-  assert "/v1/audio/transcriptions:" in captured.out
-  assert "Expected transcript: Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet" in captured.out
-  assert "Transcript: Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet" in captured.out
+  assert "/v1/chat/completions (nato alphabet):" in captured.out
+  assert "/v1/audio/transcriptions (quick brown fox):" in captured.out
+  assert "Expected transcript: Alpha Bravo Charlie" in captured.out
+  assert "Expected transcript: The quick brown fox jumps over the lazy dog" in captured.out
+  assert "WER:" in captured.out
   assert "***REDACTED***" in captured.out
   assert "Overall:" in captured.out
+  assert len(sent_json_payloads) == 2
+  assert len(sent_multipart_payloads) == 2
   assert sent_json_payloads[0][0] == "https://example.com/v1/chat/completions"
   assert sent_multipart_payloads[0][0] == "https://example.com/v1/audio/transcriptions"
   assert sent_json_payloads[0][1]["model"] == "gpt-shared"
@@ -718,8 +948,15 @@ def test_run_returns_failure_for_missing_words(
 
   monkeypatch.setattr(
     asr_simple,
-    "prepare_audio_fixture",
-    lambda args, output_dir: asr_simple.AudioFixture(path=audio_path, format="wav", bytes=b"RIFF"),
+    "prepare_audio_cases",
+    lambda args, output_dir: [
+      SimpleNamespace(
+        label="nato alphabet",
+        fixture=asr_simple.AudioFixture(path=audio_path, format="mp3", bytes=b"RIFF"),
+        expected_transcript="Alpha Bravo Charlie",
+        minimum_expected_words=3,
+      )
+    ],
   )
   monkeypatch.setattr(
     asr_simple,
@@ -751,7 +988,7 @@ def test_run_returns_failure_for_missing_words(
   )
   assert asr_simple.run(build_args()) == 1
   captured = capsys.readouterr()
-  assert "Transcript matched 2 of 10 expected words" in captured.out
+  assert "Transcript matched 2 of 3 expected words" in captured.out
 
 
 def test_run_returns_partial_success_for_warnings(
@@ -761,12 +998,19 @@ def test_run_returns_partial_success_for_warnings(
 ) -> None:
   audio_path = tmp_path / "speech.wav"
   audio_path.write_bytes(b"RIFF")
-  transcript = "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
+  transcript = "Alpha Bravo Charlie"
 
   monkeypatch.setattr(
     asr_simple,
-    "prepare_audio_fixture",
-    lambda args, output_dir: asr_simple.AudioFixture(path=audio_path, format="wav", bytes=b"RIFF"),
+    "prepare_audio_cases",
+    lambda args, output_dir: [
+      SimpleNamespace(
+        label="nato alphabet",
+        fixture=asr_simple.AudioFixture(path=audio_path, format="mp3", bytes=b"RIFF"),
+        expected_transcript=transcript,
+        minimum_expected_words=3,
+      )
+    ],
   )
   monkeypatch.setattr(
     asr_simple,
@@ -800,6 +1044,28 @@ def test_run_returns_partial_success_for_warnings(
   captured = capsys.readouterr()
   assert "PARTIAL SUCCESS" in captured.out
   assert "WARNING: argument model was sent" in captured.out
+
+
+def test_print_endpoint_result_skips_wer_for_empty_reference(capsys: pytest.CaptureFixture[str]) -> None:
+  result = asr_simple.EndpointExecutionResult(
+    name="/v1/chat/completions",
+    question="",
+    response_text="Alpha Bravo",
+    success=True,
+    exchange=asr_simple.HttpExchange(
+      method="POST",
+      url="https://example.com",
+      request_headers={},
+      request_body={},
+      response_status=200,
+      response_headers={},
+      response_body_text='{"choices":[{"message":{"content":"Alpha Bravo"}}]}',
+      response_json={"choices": [{"message": {"content": "Alpha Bravo"}}]},
+    ),
+  )
+  asr_simple.print_endpoint_result(result, verbose=False)
+  captured = capsys.readouterr()
+  assert "WER:" not in captured.out
 
 
 def test_run_returns_configuration_error_for_invalid_json(capsys: pytest.CaptureFixture[str]) -> None:

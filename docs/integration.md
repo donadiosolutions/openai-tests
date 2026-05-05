@@ -29,8 +29,10 @@ The suite currently runs:
 - `asr-simple` against `/v1/chat/completions` and `/v1/audio/transcriptions`
 - `list-models` against `/v1/models`
 
-The ASR test uses a small checked-in MP3 fixture containing the default expected transcript. This keeps the live integration suite
-independent from `espeak-ng` availability on the CI runner while preserving the module's normal synthesis behavior for CLI users.
+The ASR test uses the same two checked-in default MP3 fixtures that the CLI
+uses by default. This keeps the live integration suite independent from
+`espeak-ng` availability on the CI runner while still exercising the default
+bundled-sample path.
 
 ## Model Overrides
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -12,8 +11,6 @@ from openai_tests.test_modules import asr_simple, list_models, text_simple
 from openai_tests.test_modules._shared import EndpointExecutionResult, determine_overall_status
 
 OPENAI_BASE_URL = "https://api.openai.com"
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
-ASR_AUDIO_FIXTURE = FIXTURE_DIR / "asr_simple.mp3.base64"
 
 pytestmark = pytest.mark.integration
 
@@ -83,9 +80,6 @@ def test_text_simple_runs_against_openai_endpoint() -> None:
 
 
 def test_asr_simple_runs_against_openai_endpoint(tmp_path: Path) -> None:
-  audio_path = tmp_path / "asr-simple.mp3"
-  audio_path.write_bytes(base64.b64decode(ASR_AUDIO_FIXTURE.read_text(encoding="ascii")))
-
   args = parse_module_args(
     asr_simple.configure_parser,
     [
@@ -97,18 +91,10 @@ def test_asr_simple_runs_against_openai_endpoint(tmp_path: Path) -> None:
       os.getenv("OPENAI_TESTS_INTEGRATION_ASR_COMPLETIONS_MODEL", asr_simple.DEFAULT_COMPLETIONS_MODEL),
       "--transcriptions-model",
       os.getenv("OPENAI_TESTS_INTEGRATION_ASR_TRANSCRIPTIONS_MODEL", asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL),
-      "--audio-file",
-      str(audio_path),
-      "--audio-format",
-      "mp3",
-      "--expected-transcript",
-      asr_simple.DEFAULT_EXPECTED_TRANSCRIPT,
       "--min-expected-words",
       "8",
       "--transcriptions-language",
       "en",
-      "--transcriptions-prompt",
-      asr_simple.DEFAULT_EXPECTED_TRANSCRIPT,
       "--transcriptions-response-format",
       "json",
       "--timeout",
@@ -116,30 +102,38 @@ def test_asr_simple_runs_against_openai_endpoint(tmp_path: Path) -> None:
     ],
   )
 
-  audio_fixture = asr_simple.prepare_audio_fixture(args, tmp_path)
-  minimum_expected_words = asr_simple.resolve_minimum_expected_words(
-    args.min_expected_words,
-    args.expected_transcript,
-  )
-  completions_result = asr_simple.run_completions_test(
-    base_url=asr_simple.resolve_base_url(args.base_url),
-    api_key=asr_simple.resolve_api_key(args.api_key),
-    normalized_payload=asr_simple.build_completions_request_config(args, audio_fixture.bytes, audio_fixture.format),
-    expected_transcript=args.expected_transcript,
-    minimum_expected_words=minimum_expected_words,
-    timeout=args.timeout,
-  )
-  transcriptions_result = asr_simple.run_transcriptions_test(
-    base_url=asr_simple.resolve_base_url(args.base_url),
-    api_key=asr_simple.resolve_api_key(args.api_key),
-    normalized_payload=asr_simple.build_transcriptions_request_config(args),
-    audio_fixture=audio_fixture,
-    expected_transcript=args.expected_transcript,
-    minimum_expected_words=minimum_expected_words,
-    timeout=args.timeout,
-  )
+  results: list[EndpointExecutionResult] = []
+  for audio_case in asr_simple.prepare_audio_cases(args, tmp_path):
+    results.append(
+      asr_simple.run_completions_test(
+        base_url=asr_simple.resolve_base_url(args.base_url),
+        api_key=asr_simple.resolve_api_key(args.api_key),
+        normalized_payload=asr_simple.build_completions_request_config(
+          args,
+          audio_case.fixture.bytes,
+          audio_case.fixture.format,
+        ),
+        expected_transcript=audio_case.expected_transcript,
+        minimum_expected_words=audio_case.minimum_expected_words,
+        timeout=args.timeout,
+        case_label=audio_case.label,
+      )
+    )
+    results.append(
+      asr_simple.run_transcriptions_test(
+        base_url=asr_simple.resolve_base_url(args.base_url),
+        api_key=asr_simple.resolve_api_key(args.api_key),
+        normalized_payload=asr_simple.build_transcriptions_request_config(args),
+        audio_fixture=audio_case.fixture,
+        expected_transcript=audio_case.expected_transcript,
+        minimum_expected_words=audio_case.minimum_expected_words,
+        timeout=args.timeout,
+        case_label=audio_case.label,
+      )
+    )
 
-  assert_endpoints_succeeded(completions_result, transcriptions_result)
+  assert len(results) == 4
+  assert_endpoints_succeeded(*results)
 
 
 def test_list_models_runs_against_openai_endpoint() -> None:

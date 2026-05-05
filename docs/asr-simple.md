@@ -5,24 +5,29 @@
 - `POST /v1/chat/completions`
 - `POST /v1/audio/transcriptions`
 
-By default, it synthesizes a WAV file with `espeak-ng` saying:
+By default, it sends two checked-in MP3 fixtures through both APIs:
 
 ```text
-Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet
+1. Alpha through Zulu in NATO spelling words
+2. The quick brown fox jumps over the lazy dog
 ```
 
-It sends that audio to both endpoints and verifies that the returned transcript contains the expected words.
+It sends both files to both endpoints, verifies that enough expected words are
+present in each returned transcript, and prints a simple word error rate (WER)
+counter for each endpoint result.
 
 ## Quickstart
 
 ```bash
 uv run openai-tests asr-simple \
   --base-url https://api.openai.com \
-  --model gpt-4o-audio-preview \
-  --transcriptions-model gpt-4o-transcribe
+  --model gpt-4o-audio-preview
 ```
 
-Use an existing audio file instead of `espeak-ng`:
+If the transcriptions endpoint uses a different model than chat completions,
+pass `--transcriptions-model` explicitly.
+
+Use an existing audio file:
 
 ```bash
 uv run openai-tests asr-simple \
@@ -40,16 +45,26 @@ uv run openai-tests asr-simple --verbose
 
 ## Audio Fixture
 
-When `--audio-file` is omitted, the module creates a temporary file named
+When neither `--audio-file` nor `--expected-transcript` is provided, the module
+loads these bundled MP3 files from the repository:
+
+- `asr_default_nato.mp3`
+- `asr_default_pangram.mp3`
+
+The chat-completions request base64-encodes each file on the fly, and the
+transcriptions request sends the same binary file as multipart form data.
+Nothing is transcoded at runtime.
+
+When `--expected-transcript` is provided without `--audio-file`, the module
+falls back to `espeak-ng` and creates a temporary WAV file named
 `asr-simple.wav` by running:
 
 ```bash
 espeak-ng -v en-us -s 150 -w asr-simple.wav \
-  "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
+  "Your custom transcript text"
 ```
 
-The temporary directory is removed after the run. Use `--audio-file` when
-`espeak-ng` is unavailable or when testing a specific fixture.
+The temporary directory is removed after the run.
 
 Supported audio format names are:
 
@@ -69,7 +84,9 @@ multipart file content type sent to transcriptions.
 - `--base-url`: target API base URL.
 - `--model`: chat-completions model.
 - `--completions-model`: explicit chat-completions model override.
-- `--transcriptions-model`: audio-transcriptions model.
+- `--transcriptions-model`: audio-transcriptions model. When omitted, it
+  inherits the resolved `--model` value unless a transcriptions-specific
+  environment variable is set.
 - `--api-key`: explicit bearer token.
 - `--timeout`: HTTP timeout in seconds.
 - `--verbose`: print full redacted HTTP exchanges.
@@ -77,9 +94,10 @@ multipart file content type sent to transcriptions.
 ## Audio Parameters
 
 - `--audio-file`: existing audio fixture path.
-- `--audio-format`: format name for the fixture. The default is `wav`.
-- `--expected-transcript`: transcript used for accuracy checks and default
-  synthesis text.
+- `--audio-format`: format name for `--audio-file`. If omitted, the CLI uses
+  the file extension.
+- `--expected-transcript`: transcript used for accuracy checks. When provided
+  without `--audio-file`, it is also the text that `espeak-ng` synthesizes.
 - `--min-expected-words`: minimum expected words required in each returned
   transcript. The default is all words.
 - `--espeak-voice`: voice passed to `espeak-ng`. The default is `en-us`.
@@ -160,6 +178,10 @@ counterparts must decode to arrays and are appended to repeated CLI values.
 For non-streaming chat completions, text is extracted from the same chat-completions shapes used by `text-simple`. For streaming chat
 completions, the module parses SSE `data:` events and concatenates `choices[].delta.content`.
 
+For Qwen ASR model families, the module also strips known wrapper prefixes such
+as `language English<asr_text>` from chat-completions output before matching
+and WER calculation.
+
 For non-streaming transcriptions, text is extracted from:
 
 - top-level `text`
@@ -179,8 +201,22 @@ An endpoint fails when:
 - the response format is incompatible with the requested mode
 - the transcript does not contain enough expected words
 
-Accuracy is case-insensitive and punctuation-insensitive. For the default transcript, every one of the ten words must appear unless
-`--min-expected-words` lowers the requirement.
+Accuracy is case-insensitive and punctuation-insensitive. By default, each
+bundled sample requires all of its expected words unless `--min-expected-words`
+lowers the requirement.
+
+The CLI also prints a WER counter for each endpoint result as
+`WER: <percent> (<errors>/<reference words>)`.
+
+The default acceptance rule allows the endpoint to pass when either:
+
+- the expected-word threshold is met
+- the WER is below `15%`
+
+Common NATO-style spelling variants are normalized before both matching and WER
+calculation. For example, variants such as `viktor`, `whisky`, `charly`,
+`romeu`, `uniforme`, `yanke`, and `zooloo` are treated as their canonical
+forms.
 
 ## Warnings
 
@@ -200,7 +236,7 @@ temperature, timestamp granularities, chunking strategy, and diarization speaker
 
 ## Examples
 
-Require only eight of the ten default words:
+Require only eight expected words per sample:
 
 ```bash
 uv run openai-tests asr-simple --min-expected-words 8
@@ -228,4 +264,11 @@ Pass custom chat-completions metadata:
 ```bash
 uv run openai-tests asr-simple \
   --completions-metadata-json '{"suite":"asr-simple"}'
+```
+
+Synthesize custom text with `espeak-ng` instead of using the bundled samples:
+
+```bash
+uv run openai-tests asr-simple \
+  --expected-transcript "Please transcribe this sentence exactly."
 ```
