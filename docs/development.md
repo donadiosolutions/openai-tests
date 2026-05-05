@@ -126,6 +126,13 @@ generates `coverage.xml` through `uv run poe check-unit` and uploads that report
 to Codecov. The Codecov GitHub Action is pinned by commit SHA, the Codecov CLI
 version is pinned explicitly, and uploads authenticate through GitHub OIDC.
 
+PyPI publication is handled separately in
+`.github/workflows/publish-pypi.yml`. When a non-draft GitHub Release is
+published, that workflow builds the sdist and wheel in one GitHub-hosted Ubuntu
+job, stores them as an artifact, and publishes them from a second GitHub-hosted
+Ubuntu job through PyPI trusted publishing. The PyPI project must be configured
+with a trusted publisher for this repository and the `pypi` environment.
+
 The GitHub Actions workflow has separate `unit` and `integration` jobs that run
 in parallel, and the `integration` job receives `OPENAI_API_KEY` from
 `secrets.OPENAI_API_KEY`. A final `validate` job depends on both jobs and
