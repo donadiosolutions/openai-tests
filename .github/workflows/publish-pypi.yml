@@ -4,6 +4,12 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Git ref to build and publish, such as a release tag.
+        required: true
+        default: main
 
 permissions:
   contents: read
@@ -11,10 +17,12 @@ permissions:
 jobs:
   build:
     name: build-distributions
-    if: ${{ github.event.release.draft == false }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.draft == false) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.event.release.tag_name }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version-file: .python-version
@@ -31,7 +39,7 @@ jobs:
 
   publish:
     name: publish-to-pypi
-    if: ${{ github.event.release.draft == false }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.draft == false) }}
     needs:
       - build
     runs-on: ubuntu-24.04
@@ -47,7 +55,7 @@ jobs:
           name: python-package-distributions
           path: dist/
       - name: Publish distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/
           print-hash: true
