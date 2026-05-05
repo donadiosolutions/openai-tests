@@ -21,8 +21,11 @@ surfaces, runs those requests against a target base URL, and reports whether the
 `text-simple` asks a deterministic text question through both chat completions and responses. It verifies that both endpoints return
 text and warns when the responses endpoint echoes selected parameters differently or returns a tool call when no suitable tool was sent.
 
-`asr-simple` creates or reuses a short audio fixture, transcribes it through both chat completions and audio transcriptions, verifies
-that enough expected words are present, and warns when returned metadata suggests parameters changed in transit.
+`asr-simple` uses two bundled MP3 speech samples by default, or a caller-provided
+audio file or synthesized text when requested, then transcribes each sample
+through both chat completions and audio transcriptions, verifies that enough
+expected words are present, reports WER, and warns when returned metadata
+suggests parameters changed in transit.
 
 `list-models` lists every available model through `GET /v1/models` and verifies the response shape against the official
 models-list schema.

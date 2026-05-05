@@ -30,6 +30,10 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/openai_tests"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"asr_default_nato.mp3" = "openai_tests/assets/asr_default_nato.mp3"
+"asr_default_pangram.mp3" = "openai_tests/assets/asr_default_pangram.mp3"
+
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 testpaths = ["tests"]

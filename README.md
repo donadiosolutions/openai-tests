@@ -44,8 +44,9 @@ Base URLs may include `/v1` or omit it. Both `https://example.test` and `https:/
 
 > [!IMPORTANT]
 > **Trust surface:** endpoint tests read API keys from CLI flags or environment variables, send HTTP requests only to the configured
-> `--base-url`, and redact `Authorization` in verbose output. `asr-simple` runs `espeak-ng` only when it needs to synthesize the default
-> audio fixture, writes that fixture in a temporary directory, and removes it after the run. `uv sync` installs project dependencies into
+> `--base-url`, and redact `Authorization` in verbose output. `asr-simple` uses checked-in MP3 fixtures by default and runs `espeak-ng`
+> only when you supply custom text through `--expected-transcript` without `--audio-file`; synthesized WAV files are written to a
+> temporary directory and removed after the run. `uv sync` installs project dependencies into
 > the local environment; `uv run poe socket` also runs `npm ci` from the checked-in lockfile for the pinned Socket CLI. To remove a local
 > checkout, delete the repository directory and any generated `.venv` or `node_modules` directories.
 
@@ -133,17 +134,20 @@ uv run openai-tests text-simple \
 ```bash
 uv run openai-tests asr-simple \
   --base-url https://api.openai.com \
-  --model gpt-4o-audio-preview \
-  --transcriptions-model gpt-4o-transcribe
+  --model gpt-4o-audio-preview
 ```
 
-By default, `asr-simple` uses `espeak-ng` to say:
+If the transcriptions endpoint needs a different model than chat completions,
+pass `--transcriptions-model` explicitly.
+
+By default, `asr-simple` sends two checked-in MP3 fixtures:
 
 ```text
-Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet
+1. Alpha through Zulu in NATO spelling words
+2. The quick brown fox jumps over the lazy dog
 ```
 
-If `espeak-ng` is not available, use your own fixture:
+To test your own fixture:
 
 ```bash
 uv run openai-tests asr-simple \
@@ -151,6 +155,13 @@ uv run openai-tests asr-simple \
   --audio-format wav \
   --expected-transcript \
   "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
+```
+
+To synthesize custom spoken text on demand with `espeak-ng`, omit `--audio-file` and provide only the transcript text:
+
+```bash
+uv run openai-tests asr-simple \
+  --expected-transcript "Please transcribe this sentence exactly."
 ```
 
 ### Pass provider-specific knobs
@@ -180,6 +191,11 @@ uv run openai-tests text-simple --no-responses-store
 
 The CLI exits with `0` only when all checked endpoints pass. It exits with `1` for failures or partial successes, and `2` for local
 configuration errors such as invalid JSON arguments.
+
+For ASR checks, each endpoint result also prints a simple word error rate counter as `WER: <percent> (<errors>/<reference words>)`.
+The default acceptance rule allows the transcript to pass when either the expected-word threshold is met or the WER stays below `15%`.
+Common NATO-style spelling variants such as `viktor`, `whisky`, `charly`, `romeu`, `uniforme`, `yanke`, and `zooloo` are normalized
+before scoring.
 
 ## Configuration
 
