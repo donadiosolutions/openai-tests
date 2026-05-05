@@ -1,29 +1,118 @@
 # openai-tests
 
+**Stop hand-building one-off cURL probes for every OpenAI-compatible endpoint.**
+
 [![tests](https://img.shields.io/github/actions/workflow/status/donadiosolutions/openai-tests/ci.yml?branch=main&label=tests&logo=github)](https://github.com/donadiosolutions/openai-tests/actions/workflows/ci.yml)
 [![code quality](https://img.shields.io/github/actions/workflow/status/donadiosolutions/openai-tests/github-code-scanning/codeql?branch=main&label=code%20quality&logo=github)](https://github.com/donadiosolutions/openai-tests/actions/workflows/github-code-scanning/codeql)
 [![socket](https://img.shields.io/github/check-runs/donadiosolutions/openai-tests/main?nameFilter=Socket%20Security%3A%20Project%20Report&label=socket)](https://github.com/donadiosolutions/openai-tests/commits/main)
 [![codecov](https://codecov.io/gh/donadiosolutions/openai-tests/graph/badge.svg)](https://codecov.io/gh/donadiosolutions/openai-tests)
 
-`openai-tests` is a small CLI for probing OpenAI-compatible endpoints with focused compatibility checks. Each test module sends a
-simple, inspectable request through two related API surfaces, prints the observed responses, and flags failures or suspicious response
-shape changes.
+[Quickstart](#quickstart) | [See It Work](#see-it-work) | [Checks](#checks) | [Recipes](#recipes) | [Documentation](#documentation)
+
+`openai-tests` is a small CLI for proving whether an API really behaves like an OpenAI endpoint. It sends known-good requests, checks
+the response shape and content, compares related API surfaces, and can print the exact redacted HTTP exchange when something looks
+wrong.
+
+If you only need one raw request, `curl` is still perfect. If you are validating a gateway, proxy, hosted model, local server, or
+OpenAI-compatible deployment more than once, this gives you repeatable smoke tests instead of a folder full of hand-edited JSON bodies.
 
 ## Quickstart
 
-Install the project dependencies:
-
 ```bash
+git clone https://github.com/donadiosolutions/openai-tests.git
+cd openai-tests
 uv sync --all-groups
 ```
 
-List the available test modules:
+Run the fastest useful check against OpenAI:
 
 ```bash
-uv run openai-tests modules
+export OPENAI_API_KEY="sk-..."
+uv run openai-tests text-simple --model gpt-4.1-mini
 ```
 
-Run the text-generation check against chat completions and responses:
+Or point the same check at any compatible endpoint:
+
+```bash
+export OPENAI_TESTS_API_KEY="your-token"
+uv run openai-tests text-simple \
+  --base-url https://your-openai-compatible-service.example \
+  --model your-model
+```
+
+Base URLs may include `/v1` or omit it. Both `https://example.test` and `https://example.test/v1` work.
+
+> [!IMPORTANT]
+> **Trust surface:** endpoint tests read API keys from CLI flags or environment variables, send HTTP requests only to the configured
+> `--base-url`, and redact `Authorization` in verbose output. `asr-simple` runs `espeak-ng` only when it needs to synthesize the default
+> audio fixture, writes that fixture in a temporary directory, and removes it after the run. `uv sync` installs project dependencies into
+> the local environment; `uv run poe socket` also runs `npm ci` from the checked-in lockfile for the pinned Socket CLI. To remove a local
+> checkout, delete the repository directory and any generated `.venv` or `node_modules` directories.
+
+## See It Work
+
+```bash
+$ uv run openai-tests text-simple --model gpt-4.1-mini
+/v1/chat/completions: PASSED
+Question: What is the capital of France?
+Response: Paris is the capital of France.
+
+/v1/responses: PASSED
+Question: What is the capital of France?
+Response: Paris is the capital of France.
+
+Overall: PASSED
+```
+
+That run did more than check for HTTP 200. It asked the same simple question through both `/v1/chat/completions` and `/v1/responses`,
+extracted text from each response, verified the text was usable, and would have warned if the responses endpoint echoed important
+parameters differently.
+
+When you need to inspect the actual payloads, add `--verbose`:
+
+```bash
+uv run openai-tests text-simple \
+  --base-url https://your-openai-compatible-service.example \
+  --model your-model \
+  --verbose
+```
+
+Verbose mode prints the request URL, headers, JSON body, response status, response headers, and raw response body. Bearer tokens are
+redacted.
+
+## Checks
+
+| Module | What it exercises | What it catches |
+| --- | --- | --- |
+| `list-models` | `GET /v1/models` | malformed model-list responses, missing required fields, non-JSON responses, HTTP failures |
+| `text-simple` | `/v1/chat/completions` and `/v1/responses` | empty text, incompatible response shapes, parameter mismatches, unexpected tool-call-like output |
+| `asr-simple` | `/v1/chat/completions` with audio input and `/v1/audio/transcriptions` | missing transcripts, wrong transcript content, streaming/non-streaming shape issues, metadata mismatches |
+
+Each module is intentionally small. The point is not to benchmark model quality. The point is to answer: "Can this endpoint accept the
+same request shape my OpenAI client will send, and can I trust the response shape I get back?"
+
+## Recipes
+
+### List available models
+
+```bash
+uv run openai-tests list-models \
+  --base-url https://api.openai.com
+```
+
+Output is a schema check plus the returned model IDs:
+
+```text
+/v1/models: PASSED
+Models:
+- gpt-4.1-mini
+- gpt-4.1
+- gpt-4o-transcribe
+
+Overall: PASSED
+```
+
+### Compare chat completions and responses
 
 ```bash
 uv run openai-tests text-simple \
@@ -31,7 +120,15 @@ uv run openai-tests text-simple \
   --model gpt-4.1-mini
 ```
 
-Run the speech-recognition check against chat completions and audio transcriptions:
+Use separate models when a provider routes the two APIs differently:
+
+```bash
+uv run openai-tests text-simple \
+  --model gpt-4.1-mini \
+  --responses-model gpt-4.1
+```
+
+### Test speech recognition
 
 ```bash
 uv run openai-tests asr-simple \
@@ -40,31 +137,98 @@ uv run openai-tests asr-simple \
   --transcriptions-model gpt-4o-transcribe
 ```
 
-List available models and validate the models-list response schema:
+By default, `asr-simple` uses `espeak-ng` to say:
 
-```bash
-uv run openai-tests list-models \
-  --base-url https://api.openai.com
+```text
+Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet
 ```
 
-These commands read the API key from `OPENAI_API_KEY` or `OPENAI_TESTS_API_KEY` unless `--api-key` is provided.
-
-Run the live integration suite against OpenAI:
+If `espeak-ng` is not available, use your own fixture:
 
 ```bash
-uv run poe test-integration
+uv run openai-tests asr-simple \
+  --audio-file ./speech.wav \
+  --audio-format wav \
+  --expected-transcript \
+  "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet"
 ```
 
-For integration tests, `OPENAI_API_KEY` is loaded from `.env` first when that file is present, then from the process environment.
+### Pass provider-specific knobs
 
-Run the Socket dependency-security gate:
+Optional API parameters stay unset until you pass them. JSON values can be inline or loaded from a file with `@path`.
 
 ```bash
+uv run openai-tests text-simple \
+  --responses-metadata-json '{"suite":"compatibility-smoke"}' \
+  --responses-temperature 0
+```
+
+Boolean parameters use paired flags, so you can distinguish "unset" from explicit true or false:
+
+```bash
+uv run openai-tests text-simple --responses-store
+uv run openai-tests text-simple --no-responses-store
+```
+
+## Status Labels
+
+| Status | Meaning |
+| --- | --- |
+| `PASSED` | The endpoint returned a usable response and no warnings were produced. |
+| `PARTIAL SUCCESS` | The endpoint returned usable content, but a warning suggests compatibility drift. |
+| `FAILED` | The request failed, the response shape was invalid, or the content check did not pass. |
+
+The CLI exits with `0` only when all checked endpoints pass. It exits with `1` for failures or partial successes, and `2` for local
+configuration errors such as invalid JSON arguments.
+
+## Configuration
+
+Common options:
+
+| Option | Environment fallback | Default |
+| --- | --- | --- |
+| `--api-key` | `OPENAI_API_KEY`, then `OPENAI_TESTS_API_KEY` | no authorization header |
+| `--base-url` | `OPENAI_BASE_URL`, then `OPENAI_TESTS_BASE_URL` | `https://api.openai.com` |
+| `--model` | `OPENAI_MODEL`, then `OPENAI_TESTS_MODEL` | module-specific |
+| `--timeout` | none | `30` seconds |
+| `--verbose` | none | off |
+
+The live integration runner also loads `OPENAI_API_KEY` from a repository-root `.env` file before falling back to the inherited
+environment.
+
+## How It Works
+
+The CLI keeps request construction explicit and inspectable. Modules use direct HTTP requests from the Python standard library rather
+than an SDK, so the payloads stay close to the API surface being tested.
+
+- Required endpoint fields receive conservative defaults.
+- Optional endpoint fields remain `None` until the user passes them.
+- `None` values are pruned before JSON or multipart requests are sent.
+- String-or-object API parameters expose both plain string flags and `-json` flags.
+- Full HTTP exchanges are captured for verbose output.
+- Secrets are redacted before printing.
+
+The module registry lives in `src/openai_tests/registry.py`. New endpoint checks belong under `src/openai_tests/test_modules/` and are
+documented under `docs/`.
+
+## Development and CI
+
+Run the standard local checks before merging changes:
+
+```bash
+uv run poe fmt
+uv run poe check
 uv run poe socket
 ```
 
-The Socket task reads `SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or
-`SOCKET_CLI_API_TOKEN`.
+`uv run poe check` runs formatting checks, Ruff linting, type checking, actionlint, unit tests, live OpenAI integration tests, coverage
+validation, and pre-commit hooks. The repository requires 100% line and branch coverage.
+
+`uv run poe socket` installs the pinned Socket CLI from `package-lock.json`, generates CycloneDX manifests, and runs an authenticated
+read-only Socket scan preflight. It requires `SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or `SOCKET_CLI_API_TOKEN`.
+
+GitHub Actions runs `unit` and `integration` in parallel, then a `validate` job succeeds only when both passed. Socket's GitHub App
+publishes separate required dependency-security checks.
 
 ## Documentation
 
@@ -76,3 +240,21 @@ The Socket task reads `SOCKET_API_KEY`, `SOCKET_API_TOKEN`, or
 - [asr-simple module](docs/asr-simple.md)
 - [list-models module](docs/list-models.md)
 - [Development and verification](docs/development.md)
+
+## FAQ
+
+**Can I use it against a local service with no auth?**
+
+Yes. If no API key is provided through `--api-key`, `OPENAI_API_KEY`, or `OPENAI_TESTS_API_KEY`, no `Authorization` header is sent.
+
+**Is this a replacement for a full API conformance suite?**
+
+No. It is a focused smoke-test tool. It is meant to catch obvious request/response incompatibilities quickly and repeatedly.
+
+**Why not use the OpenAI SDK?**
+
+The tests deliberately use direct HTTP requests so the request body, endpoint URL, response status, and raw response are easy to inspect.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
