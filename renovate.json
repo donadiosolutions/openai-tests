@@ -6,9 +6,16 @@
     ":prHourlyLimitNone",
     ":pinDigests"
   ],
+  "dependencyDashboard": true,
+  "dependencyDashboardLabels": [
+    "dependencies"
+  ],
   "enabledManagers": [
     "github-actions",
-    "regex"
+    "npm",
+    "pep621",
+    "pyenv",
+    "custom.regex"
   ],
   "schedule": [
     "before 6am on monday"
@@ -16,6 +23,9 @@
   "labels": [
     "dependencies"
   ],
+  "lockFileMaintenance": {
+    "enabled": true
+  },
   "packageRules": [
     {
       "matchManagers": [
@@ -25,15 +35,24 @@
     },
     {
       "matchManagers": [
-        "regex"
+        "npm",
+        "pep621",
+        "pyenv"
+      ],
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": [
+        "custom.regex"
       ],
       "groupName": "pre-commit hooks"
     }
   ],
-  "regexManagers": [
+  "customManagers": [
     {
-      "fileMatch": [
-        "(^|/)\\.pre-commit-config\\.yaml$"
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)\\.pre-commit-config\\.yaml$/"
       ],
       "matchStrings": [
         "repo: https://github\\.com/(?<depName>[^\\s]+)\\s+rev: (?<currentDigest>[a-f0-9]{40}) # renovate: version=(?<currentValue>v?[^\\s]+)"
