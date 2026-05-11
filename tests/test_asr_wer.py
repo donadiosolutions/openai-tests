@@ -1415,10 +1415,14 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
     asr_wer.require_manifest_filename({"source_file": "nested/call.wav"}, "source_file")
   with pytest.raises(ValueError, match="plain filename source_file"):
     asr_wer.require_manifest_filename({"source_file": "C:call.wav"}, "source_file")
+  with pytest.raises(ValueError, match="plain filename source_file"):
+    asr_wer.require_manifest_filename({"source_file": "call\r\nbad.wav"}, "source_file")
   with pytest.raises(ValueError, match="plain filename stem source_stem"):
     asr_wer.require_manifest_stem({"source_stem": "/tmp/call"}, "source_stem")
   with pytest.raises(ValueError, match="plain filename stem source_stem"):
     asr_wer.require_manifest_stem({"source_stem": "C:call"}, "source_stem")
+  with pytest.raises(ValueError, match="plain filename stem source_stem"):
+    asr_wer.require_manifest_stem({"source_stem": "call\tbad"}, "source_stem")
   with pytest.raises(ValueError, match="numeric duration_seconds"):
     asr_wer.require_manifest_number({"duration_seconds": "1"}, "duration_seconds")
   with pytest.raises(ValueError, match="finite numeric duration_seconds"):
@@ -1706,6 +1710,19 @@ def test_process_prepared_sources_reports_chunks_output_collision(tmp_path: Path
   assert [result.status for result in results] == ["failed"]
   assert results[0].error_message is not None
   assert "Prepared chunks output path is not a directory" in results[0].error_message
+
+
+def test_prepare_prepared_chunks_output_dir_rejects_symlink(tmp_path: Path) -> None:
+  output_dir = tmp_path / "ground"
+  target_dir = tmp_path / "audit-target"
+  target_dir.mkdir()
+  output_dir.mkdir()
+  (output_dir / "chunks").symlink_to(target_dir, target_is_directory=True)
+
+  error = asr_wer.prepare_prepared_chunks_output_dir(output_dir)
+
+  assert error is not None
+  assert "Prepared chunks output path must not be a symlink" in error
 
 
 def test_prepare_prepared_chunks_output_dir_reports_os_errors(

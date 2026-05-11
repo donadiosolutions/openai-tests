@@ -538,6 +538,7 @@ def require_manifest_filename(row: dict[str, Any], key: str) -> str:
     or ":" in value
     or "/" in value
     or "\\" in value
+    or has_control_character(value)
     or value
     in {
       ".",
@@ -558,6 +559,7 @@ def require_manifest_stem(row: dict[str, Any], key: str) -> str:
     or ":" in value
     or "/" in value
     or "\\" in value
+    or has_control_character(value)
     or value
     in {
       ".",
@@ -566,6 +568,12 @@ def require_manifest_stem(row: dict[str, Any], key: str) -> str:
   ):
     raise ValueError(f"Prepared manifest row requires plain filename stem {key}")
   return value
+
+
+def has_control_character(value: str) -> bool:
+  """Return whether a string contains ASCII control characters."""
+
+  return any(ord(character) < 32 or ord(character) == 127 for character in value)
 
 
 def require_manifest_number(row: dict[str, Any], key: str) -> float:
@@ -839,6 +847,8 @@ def prepare_prepared_chunks_output_dir(output_dir: Path) -> str | None:
   """Create the prepared chunk audit directory or return a controlled failure message."""
 
   chunks_dir = output_dir / "chunks"
+  if chunks_dir.is_symlink():
+    return f"Prepared chunks output path must not be a symlink: {chunks_dir}"
   if chunks_dir.exists() and not chunks_dir.is_dir():
     return f"Prepared chunks output path is not a directory: {chunks_dir}"
   try:

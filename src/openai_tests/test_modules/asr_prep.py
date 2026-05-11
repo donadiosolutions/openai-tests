@@ -20,6 +20,7 @@ from . import asr_simple
 
 SEGMENT_DURATION_SECONDS = 30.0
 DEFAULT_OVERLAP_SECONDS = 3.0
+TIMING_TOLERANCE_SECONDS = 0.001
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +256,7 @@ def plan_segments(
 
   step = SEGMENT_DURATION_SECONDS - overlap_seconds
   starts: list[float] = [0.0]
-  while starts[-1] + SEGMENT_DURATION_SECONDS < duration_seconds:
+  while starts[-1] + SEGMENT_DURATION_SECONDS < duration_seconds - TIMING_TOLERANCE_SECONDS:
     starts.append(starts[-1] + step)
   segments: list[Segment] = []
   for index, start in enumerate(starts):

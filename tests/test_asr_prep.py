@@ -458,12 +458,21 @@ def test_segment_planning_uses_stable_30_second_chunks_and_direct_children(tmp_p
   )
   assert [segment.start_seconds for segment in custom] == [0.0, 25.0, 50.0]
 
+  sub_tolerance_tail = asr_prep.plan_segments(
+    audio_files[0], duration_seconds=57.001, overlap_seconds=3.0, output_dir=audio_dir / "prep"
+  )
+  assert [(segment.start_seconds, segment.end_seconds) for segment in sub_tolerance_tail] == [(0.0, 30.0), (27.0, 57.0)]
+
   rounded_to_zero = asr_prep.plan_segments(
     audio_files[0], duration_seconds=30.0001, overlap_seconds=0.0, output_dir=audio_dir / "prep"
   )
   assert [(segment.start_seconds, segment.end_seconds, segment.duration_seconds) for segment in rounded_to_zero] == [
     (0.0, 30.0, 30.0)
   ]
+  assert (
+    asr_prep.plan_segments(audio_files[0], duration_seconds=0.0001, overlap_seconds=0.0, output_dir=audio_dir / "prep")
+    == []
+  )
 
 
 def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
