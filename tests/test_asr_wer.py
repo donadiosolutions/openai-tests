@@ -1097,6 +1097,15 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match="integer chunk_index"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  duplicate_index = dict(unsafe_base)
+  duplicate_index["chunks"] = [
+    unsafe_base["chunks"][0],
+    {**unsafe_base["chunks"][0], "chunk_file": "call_0000_000000_001000.wav"},
+  ]
+  manifest_path.write_text(json.dumps(duplicate_index), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"duplicate chunk_index 0 for call\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   manifest_path.write_text(
     json.dumps({"overlap_seconds": True, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
     encoding="utf-8",
@@ -1273,6 +1282,7 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   )
   assert failed_skip is not None
   assert failed_skip.status == "failed"
+  assert failed_skip.duration_seconds == 50.0
 
   missing_chunk_result = asr_wer.build_prepared_source_result(
     args=build_args("ground", str(audio_dir), "--prep"),
@@ -1299,6 +1309,24 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   )
   assert write_failed.status == "failed"
   assert write_failed.error_message == "disk full"
+
+  duplicate_chunk_source = asr_wer.PreparedSource(
+    audio=sources[0].audio,
+    chunks=(sources[0].chunks[0], sources[0].chunks[0]),
+    duration_seconds=sources[0].duration_seconds,
+    overlap_seconds=sources[0].overlap_seconds,
+    segment_duration_seconds=sources[0].segment_duration_seconds,
+  )
+  count_mismatch = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=duplicate_chunk_source,
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert count_mismatch.status == "failed"
+  assert count_mismatch.error_message == "chunk transcript count mismatch"
 
 
 def test_process_prepared_sources_uses_existing_combined_ground(

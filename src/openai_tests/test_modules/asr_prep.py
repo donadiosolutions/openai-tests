@@ -174,8 +174,13 @@ def plan_segments(
   segments: list[Segment] = []
   for index, start in enumerate(starts):
     end = min(start + SEGMENT_DURATION_SECONDS, duration_seconds)
-    start_ms = seconds_to_milliseconds(start)
-    end_ms = seconds_to_milliseconds(end)
+    start_seconds = round(start, 3)
+    end_seconds = round(end, 3)
+    segment_duration_seconds = round(max(end_seconds - start_seconds, 0.0), 3)
+    if segment_duration_seconds <= 0:
+      continue
+    start_ms = seconds_to_milliseconds(start_seconds)
+    end_ms = seconds_to_milliseconds(end_seconds)
     chunk_path = output_dir / f"{audio_file.stem}_{index:04d}_{start_ms:06d}_{end_ms:06d}.wav"
     segments.append(
       Segment(
@@ -184,9 +189,9 @@ def plan_segments(
         source_stem=audio_file.stem,
         chunk_path=chunk_path,
         index=index,
-        start_seconds=round(start, 3),
-        end_seconds=round(end, 3),
-        duration_seconds=round(max(end - start, 0.0), 3),
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        duration_seconds=segment_duration_seconds,
       )
     )
   return segments

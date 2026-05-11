@@ -311,6 +311,7 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     source_durations[source_file] = require_manifest_number(source_raw, "duration_seconds")
 
   grouped: dict[str, list[PreparedChunk]] = {}
+  seen_chunk_indices: dict[str, set[int]] = {}
   for chunk_raw in chunks_raw:
     if not isinstance(chunk_raw, dict):
       raise ValueError("Prepared manifest chunk rows must be objects")
@@ -329,11 +330,16 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
       format=source_path.suffix.lower().lstrip("."),
     )
     chunk_audio = AudioInput(path=chunk_path, stem=chunk_path.stem, format=chunk_path.suffix.lower().lstrip("."))
+    chunk_index = require_manifest_integer(chunk_raw, "chunk_index")
+    source_indices = seen_chunk_indices.setdefault(source_file, set())
+    if chunk_index in source_indices:
+      raise ValueError(f"Prepared manifest duplicate chunk_index {chunk_index} for {source_file}")
+    source_indices.add(chunk_index)
     grouped.setdefault(source_file, []).append(
       PreparedChunk(
         audio=chunk_audio,
         source=source_audio,
-        index=require_manifest_integer(chunk_raw, "chunk_index"),
+        index=chunk_index,
         start_seconds=require_manifest_number(chunk_raw, "start_seconds"),
         end_seconds=require_manifest_number(chunk_raw, "end_seconds"),
         duration_seconds=require_manifest_number(chunk_raw, "duration_seconds"),
@@ -626,6 +632,7 @@ def maybe_skip_prepared_ground_file(
       normalized_output_path=normalized_path,
       elapsed_seconds=None,
       error_message=str(exc),
+      duration_seconds=source.duration_seconds,
       chunk_count=len(source.chunks),
     )
   return FileResult(
@@ -660,6 +667,8 @@ def build_prepared_source_result(
     errors = [*chunk_errors]
     if missing:
       errors.append(f"missing chunk transcripts: {', '.join(str(index) for index in missing)}")
+    if not errors:
+      errors.append("chunk transcript count mismatch")
     result = build_failed_file_result(
       audio_file=source.audio,
       output_path=exact_path,
