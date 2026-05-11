@@ -243,6 +243,8 @@ def create_output_dir(args: argparse.Namespace, requested_output_dir: Path) -> P
   """Create the output directory, suffixing eval directories on collision."""
 
   if args.mode == "ground":
+    if requested_output_dir.exists() and not requested_output_dir.is_dir():
+      raise ValueError(f"Ground output path is not a directory: {requested_output_dir}")
     requested_output_dir.mkdir(parents=True, exist_ok=True)
     return requested_output_dir
 

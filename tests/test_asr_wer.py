@@ -252,6 +252,25 @@ def test_create_output_dir_avoids_eval_collisions(tmp_path: Path) -> None:
   assert (tmp_path / "model_1234-1").is_dir()
 
 
+def test_ground_output_file_collision_returns_configuration_error(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  (audio_dir / "ground").write_text("not a directory", encoding="utf-8")
+
+  def fail_send(**_: object) -> asr_simple.HttpExchange:
+    raise AssertionError("endpoint should not be called with an invalid output path")
+
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fail_send)
+  assert asr_wer.run(build_args("ground", str(audio_dir))) == 2
+  captured = capsys.readouterr()
+  assert "Ground output path is not a directory" in captured.err
+
+
 def test_ground_transcriptions_writes_exact_and_normalized_outputs(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
