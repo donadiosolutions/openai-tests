@@ -718,58 +718,60 @@ def process_prepared_sources(
   remaining_by_source: dict[str, int] = {source.audio.path.name: len(source.chunks) for source in prepared_sources}
   timing_lock = threading.Lock()
 
-  with tqdm(total=total_chunks, unit="chunk") as progress:
-    with ThreadPoolExecutor(max_workers=args.batch) as executor:
-      futures: dict[Future[str], PreparedChunk] = {}
-      chunks_to_submit: list[PreparedChunk] = []
-      for source in prepared_sources:
-        skipped_result = maybe_skip_prepared_ground_file(args, source, output_dir)
-        if skipped_result is not None:
-          results_by_source[source.audio.path.name] = skipped_result
-          progress.update(len(source.chunks))
-          tqdm.write(format_file_result(skipped_result, mode=args.mode))
-          continue
-        chunks_to_submit.extend(source.chunks)
+  with (
+    tqdm(total=total_chunks, unit="chunk") as progress,
+    ThreadPoolExecutor(max_workers=args.batch) as executor,
+  ):
+    futures: dict[Future[str], PreparedChunk] = {}
+    chunks_to_submit: list[PreparedChunk] = []
+    for source in prepared_sources:
+      skipped_result = maybe_skip_prepared_ground_file(args, source, output_dir)
+      if skipped_result is not None:
+        results_by_source[source.audio.path.name] = skipped_result
+        progress.update(len(source.chunks))
+        tqdm.write(format_file_result(skipped_result, mode=args.mode))
+        continue
+      chunks_to_submit.extend(source.chunks)
 
-      next_chunk_index = 0
+    next_chunk_index = 0
 
-      def submit_next_chunk() -> None:
-        nonlocal next_chunk_index
-        if next_chunk_index >= len(chunks_to_submit):
-          return
-        chunk = chunks_to_submit[next_chunk_index]
-        next_chunk_index += 1
-        futures[
-          executor.submit(
-            transcribe_prepared_chunk,
-            args=args,
-            chunk=chunk,
-            base_url=base_url,
-            api_key=api_key,
-            started_by_source=started_by_source,
-            timing_lock=timing_lock,
-          )
-        ] = chunk
+    def submit_next_chunk() -> None:
+      nonlocal next_chunk_index
+      if next_chunk_index >= len(chunks_to_submit):
+        return
+      chunk = chunks_to_submit[next_chunk_index]
+      next_chunk_index += 1
+      futures[
+        executor.submit(
+          transcribe_prepared_chunk,
+          args=args,
+          chunk=chunk,
+          base_url=base_url,
+          api_key=api_key,
+          started_by_source=started_by_source,
+          timing_lock=timing_lock,
+        )
+      ] = chunk
 
-      for _ in range(min(args.batch, len(chunks_to_submit))):
+    for _ in range(min(args.batch, len(chunks_to_submit))):
+      submit_next_chunk()
+
+    while futures:
+      done, _ = wait(futures, return_when=FIRST_COMPLETED)
+      for future in done:
+        chunk = futures.pop(future)
+        try:
+          transcript = future.result()
+          chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
+          chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
+          atomic_write_text(chunk_output, transcript)
+        except Exception as exc:
+          chunk_errors[chunk.source.path.name].append(str(exc))
+        remaining_by_source[chunk.source.path.name] -= 1
+        if remaining_by_source[chunk.source.path.name] == 0:
+          finished_by_source[chunk.source.path.name] = time.perf_counter()
+        progress.update(1)
         submit_next_chunk()
-
-      while futures:
-        done, _ = wait(futures, return_when=FIRST_COMPLETED)
-        for future in done:
-          chunk = futures.pop(future)
-          try:
-            transcript = future.result()
-            chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
-            chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
-            atomic_write_text(chunk_output, transcript)
-          except Exception as exc:
-            chunk_errors[chunk.source.path.name].append(str(exc))
-          remaining_by_source[chunk.source.path.name] -= 1
-          if remaining_by_source[chunk.source.path.name] == 0:
-            finished_by_source[chunk.source.path.name] = time.perf_counter()
-          progress.update(1)
-          submit_next_chunk()
 
   for source in prepared_sources:
     if source.audio.path.name in results_by_source:
