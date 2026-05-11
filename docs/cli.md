@@ -19,6 +19,8 @@ Run a module:
 ```bash
 uv run openai-tests text-simple
 uv run openai-tests asr-simple
+uv run openai-tests asr-prep ./audio
+uv run openai-tests asr-wer ground ./audio
 uv run openai-tests list-models
 ```
 
@@ -27,12 +29,14 @@ Each module exposes its own help:
 ```bash
 uv run openai-tests text-simple --help
 uv run openai-tests asr-simple --help
+uv run openai-tests asr-prep --help
+uv run openai-tests asr-wer --help
 uv run openai-tests list-models --help
 ```
 
 ## Common Arguments
 
-All implemented modules support:
+Endpoint modules support:
 
 - `--base-url`: target OpenAI-compatible API base URL.
 - `--api-key`: explicit bearer token.
@@ -47,6 +51,9 @@ All implemented modules support:
 
 The module combines system and developer prompts for chat completions and sends the user prompt as the user message. For responses or
 audio-specific calls, the same text is adapted to the endpoint shape.
+
+`asr-prep` is a local preparation command. It does not send endpoint requests
+and only accepts `audio_dir` plus `--overlap`.
 
 ## JSON Arguments
 
@@ -97,6 +104,12 @@ Text and ASR endpoint checks print:
 
 `list-models` prints the endpoint name, status label, returned model IDs, and
 error message when the response does not conform to the schema.
+
+`asr-prep` prints the number of prepared chunks written. It also writes
+`prep/manifest.json` and `prep/report.txt` under the selected audio directory.
+
+`asr-wer` prints per-file WER and RTFx rows. With `--prep`, each row is the
+original source file from `prep/manifest.json`, not an individual chunk.
 
 Status labels are:
 

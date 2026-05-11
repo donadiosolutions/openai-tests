@@ -24,6 +24,8 @@ DEFAULT_OVERLAP_SECONDS = 3.0
 
 @dataclass(frozen=True, slots=True)
 class AudioInput:
+  """Supported direct-child audio file selected for preparation."""
+
   path: Path
   stem: str
   format: str
@@ -31,6 +33,8 @@ class AudioInput:
 
 @dataclass(frozen=True, slots=True)
 class Segment:
+  """Planned deterministic chunk emitted from one source audio file."""
+
   source_path: Path
   source_file: str
   source_stem: str
@@ -42,6 +46,8 @@ class Segment:
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
+  """Register asr-prep command-line arguments."""
+
   parser.add_argument("audio_dir", help="Directory containing supported direct-child audio files.")
   parser.add_argument(
     "--overlap",
@@ -52,6 +58,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+  """Create deterministic prep chunks, a manifest, and a report."""
+
   try:
     overlap = validate_overlap(args.overlap)
     audio_dir = Path(args.audio_dir)
@@ -66,6 +74,7 @@ def run(args: argparse.Namespace) -> int:
           duration = get_audio_duration_seconds(audio_file.path)
         except Exception as exc:
           raise ValueError(f"Unable to read audio duration for {audio_file.path.name}: {exc}") from exc
+        duration = round(duration, 3)
         segments = plan_segments(
           audio_file,
           duration_seconds=duration,
@@ -78,7 +87,7 @@ def run(args: argparse.Namespace) -> int:
         source_rows.append(
           {
             "source_file": audio_file.path.name,
-            "duration_seconds": round(duration, 3),
+            "duration_seconds": duration,
             "chunk_count": len(segments),
           }
         )
@@ -96,6 +105,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def validate_overlap(overlap: float) -> float:
+  """Validate overlap seconds for fixed thirty-second chunks."""
+
   if not math.isfinite(overlap):
     raise ValueError("overlap must be finite")
   if overlap < 0:
@@ -106,6 +117,8 @@ def validate_overlap(overlap: float) -> float:
 
 
 def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
+  """Return supported direct-child audio files from an audio directory."""
+
   if not audio_dir.exists():
     raise ValueError(f"Audio directory does not exist: {audio_dir}")
   if not audio_dir.is_dir():
@@ -143,6 +156,8 @@ def validate_audio_inputs(audio_files: list[AudioInput]) -> None:
 
 
 def validate_plain_filename(value: str, kind: str) -> None:
+  """Reject path-like or reserved names from source-derived artifacts."""
+
   if (
     not value
     or Path(value).is_absolute()
@@ -180,6 +195,8 @@ def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
 
 
 def prepare_output_dir(audio_dir: Path) -> Path:
+  """Validate the final prep output directory before staging work."""
+
   prep_dir = audio_dir / "prep"
   if prep_dir.exists() and not prep_dir.is_dir():
     raise ValueError(f"Prep output path is not a directory: {prep_dir}")
@@ -228,6 +245,8 @@ def plan_segments(
   overlap_seconds: float,
   output_dir: Path,
 ) -> list[Segment]:
+  """Plan deterministic chunk windows and filenames for one source file."""
+
   step = SEGMENT_DURATION_SECONDS - overlap_seconds
   starts: list[float] = [0.0]
   while starts[-1] + SEGMENT_DURATION_SECONDS < duration_seconds:
@@ -259,10 +278,14 @@ def plan_segments(
 
 
 def seconds_to_milliseconds(seconds: float) -> int:
+  """Convert rounded seconds into whole milliseconds for filenames."""
+
   return round(seconds * 1000)
 
 
 def run_ffmpeg_segment(segment: Segment) -> None:
+  """Run ffmpeg for a single planned segment."""
+
   command = [
     "ffmpeg",
     "-hide_banner",
@@ -295,6 +318,8 @@ def write_manifest(
   segments: list[Segment],
   overlap_seconds: float,
 ) -> None:
+  """Write the machine-readable prep manifest."""
+
   manifest = {
     "tool": "openai-tests asr-prep",
     "segment_duration_seconds": SEGMENT_DURATION_SECONDS,
@@ -306,6 +331,8 @@ def write_manifest(
 
 
 def segment_to_manifest_row(segment: Segment) -> dict[str, Any]:
+  """Convert a planned segment into a manifest chunk row."""
+
   row = asdict(segment)
   row.pop("source_path")
   row["chunk_file"] = segment.chunk_path.name
@@ -321,6 +348,8 @@ def write_report(
   segments: list[Segment],
   overlap_seconds: float,
 ) -> None:
+  """Write a human-readable prep summary report."""
+
   lines = [
     "asr-prep report",
     f"segment_duration_seconds: {SEGMENT_DURATION_SECONDS}",
@@ -347,6 +376,8 @@ def write_report(
 
 
 def get_audio_duration_seconds(audio_path: Path) -> float:
+  """Read a positive finite audio duration with Mutagen."""
+
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
   if isinstance(length, (int, float)) and not isinstance(length, bool) and math.isfinite(length) and length > 0:

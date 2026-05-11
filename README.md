@@ -101,6 +101,8 @@ redacted.
 | `list-models` | `GET /v1/models` | malformed model-list responses, missing required fields, non-JSON responses, HTTP failures |
 | `text-simple` | `/v1/chat/completions` and `/v1/responses` | empty text, incompatible response shapes, parameter mismatches, unexpected tool-call-like output |
 | `asr-simple` | `/v1/chat/completions` with audio input and `/v1/audio/transcriptions` | missing transcripts, wrong transcript content, streaming/non-streaming shape issues, metadata mismatches |
+| `asr-prep` | local audio files | non-deterministic long-audio inputs by segmenting direct-child audio into fixed chunks |
+| `asr-wer` | `/v1/audio/transcriptions` or `/v1/chat/completions` | batch ASR regressions, WER drift, throughput changes, prepared long-audio stitching issues |
 
 Each module is intentionally small. The point is not to benchmark model quality. The point is to answer: "Can this endpoint accept the
 same request shape my OpenAI client will send, and can I trust the response shape I get back?"
@@ -176,6 +178,36 @@ To synthesize custom spoken text on demand with `espeak-ng`, omit `--audio-file`
 pipx run openai-tests asr-simple \
   --expected-transcript "Please transcribe this sentence exactly."
 ```
+
+### Run prepared ASR WER benchmarks
+
+Use `asr-prep` when long audio should be segmented the same way every run:
+
+```bash
+pipx run openai-tests asr-prep ./calls --overlap 3.0
+```
+
+This writes `./calls/prep/manifest.json`, `./calls/prep/report.txt`, and
+30-second WAV chunks for supported direct-child audio files. The overlap
+defaults to `3.0` seconds.
+
+Create prepared ground truth, then evaluate a model against the stitched
+per-source transcripts:
+
+```bash
+pipx run openai-tests asr-wer ground ./calls --prep \
+  --endpoint transcriptions \
+  --transcriptions-model gpt-4o-transcribe
+
+pipx run openai-tests asr-wer eval ./calls --prep \
+  --endpoint transcriptions \
+  --transcriptions-model gpt-4o-transcribe
+```
+
+Prepared runs read chunks from `./calls/prep` and write combined transcripts to
+root-level output folders such as `./calls/ground` or
+`./calls/gpt-4o-transcribe_<epoch>`. Per-chunk audit transcripts are kept under
+each output folder's `chunks/` directory.
 
 ### Pass provider-specific knobs
 
@@ -267,6 +299,8 @@ publishes separate required dependency-security checks.
 - [Live OpenAI integration tests](docs/integration.md)
 - [text-simple module](docs/text-simple.md)
 - [asr-simple module](docs/asr-simple.md)
+- [asr-prep module](docs/asr-prep.md)
+- [asr-wer module](docs/asr-wer.md)
 - [list-models module](docs/list-models.md)
 - [Development and verification](docs/development.md)
 

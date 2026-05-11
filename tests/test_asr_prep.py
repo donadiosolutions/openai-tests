@@ -117,6 +117,36 @@ def test_failed_segmentation_cleans_staged_prep_output(
   assert not any(path.name.startswith(".prep.") and path.name.endswith(".tmp") for path in audio_dir.iterdir())
 
 
+def test_run_uses_manifest_rounded_duration_for_segment_planning(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  """Planning uses the same rounded duration that is written to the manifest."""
+
+  audio_dir = tmp_path / "audio-rounded-duration"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  commands: list[list[str]] = []
+
+  monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 30.0001)
+
+  def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    """Record chunk commands for a rounded-boundary source duration."""
+
+    commands.append(command)
+    Path(command[-1]).write_bytes(b"RIFF")
+    return subprocess.CompletedProcess(command, 0, "", "")
+
+  monkeypatch.setattr(asr_prep.subprocess, "run", fake_run)
+
+  assert asr_prep.run(build_args(str(audio_dir))) == 0
+
+  manifest = json.loads((audio_dir / "prep" / "manifest.json").read_text(encoding="utf-8"))
+  assert manifest["sources"] == [{"chunk_count": 1, "duration_seconds": 30.0, "source_file": "call.wav"}]
+  assert [chunk["chunk_file"] for chunk in manifest["chunks"]] == ["call_0000_000000_030000.wav"]
+  assert len(commands) == 1
+
+
 def test_staged_prep_output_does_not_delete_existing_temp_like_directory(
   capsys: pytest.CaptureFixture[str],
   monkeypatch: pytest.MonkeyPatch,
