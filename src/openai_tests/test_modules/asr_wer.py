@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from .whisper_english_normalizer import EnglishTextNormalizer
 
 SERVICE_TIER_CHOICES = ("auto", "default", "flex", "priority")
 TRANSCRIPT_NORMALIZER = EnglishTextNormalizer()
+VERBOSE_OUTPUT_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,11 +204,12 @@ def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
     raise ValueError(f"No supported audio files found in {audio_dir}; expected extensions: {supported}")
   stems: dict[str, Path] = {}
   for audio_file in audio_files:
-    if audio_file.stem in stems:
+    stem_key = audio_file.stem.casefold()
+    if stem_key in stems:
       raise ValueError(
-        f"Duplicate audio file stem {audio_file.stem!r}: {stems[audio_file.stem].name} and {audio_file.path.name}"
+        f"Duplicate audio file stem {audio_file.stem!r}: {stems[stem_key].name} and {audio_file.path.name}"
       )
-    stems[audio_file.stem] = audio_file.path
+    stems[stem_key] = audio_file.path
   validate_output_artifact_names(audio_files)
   return audio_files
 
@@ -220,14 +223,15 @@ def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
       (f"{audio_file.stem}.txt", "exact transcript"),
       (f"{audio_file.stem}_normalized.txt", "normalized transcript"),
     ):
-      if artifact_name == "report.txt":
+      artifact_key = artifact_name.casefold()
+      if artifact_key == "report.txt":
         raise ValueError(f"Audio stem {audio_file.stem!r} uses reserved output artifact {artifact_name!r}")
-      previous = artifact_owner.get(artifact_name)
+      previous = artifact_owner.get(artifact_key)
       if previous is not None:
         raise ValueError(
           f"Output artifact collision for {artifact_name!r}: {previous} and {audio_file.path.name} {kind}"
         )
-      artifact_owner[artifact_name] = f"{audio_file.path.name} {kind}"
+      artifact_owner[artifact_key] = f"{audio_file.path.name} {kind}"
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
@@ -357,7 +361,7 @@ def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, out
       normalized_path.read_text(encoding="utf-8") if normalized_path.is_file() else normalize_transcript(transcript)
     )
     if not normalized_path.is_file():
-      normalized_path.write_text(normalized, encoding="utf-8")
+      atomic_write_text(normalized_path, normalized)
     duration = get_audio_duration_seconds(audio_file.path)
   except Exception as exc:
     return build_failed_file_result(
@@ -700,16 +704,22 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
 def print_verbose_exchange(exchange: asr_simple.HttpExchange) -> None:
   """Print request and response details for --verbose batch runs."""
 
-  print()
-  print("Request:")
-  print(f"{exchange.method} {exchange.url}")
-  print(json.dumps(asr_simple.redact_headers(exchange.request_headers), indent=2, sort_keys=True))
-  print(asr_simple.format_json_like(exchange.request_body))
-  print()
-  print("Response:")
-  print(f"HTTP {exchange.response_status if exchange.response_status is not None else 'N/A'}")
-  print(json.dumps(exchange.response_headers, indent=2, sort_keys=True))
-  print(exchange.response_body_text or "(empty)")
+  message = "\n".join(
+    (
+      "",
+      "Request:",
+      f"{exchange.method} {exchange.url}",
+      json.dumps(asr_simple.redact_headers(exchange.request_headers), indent=2, sort_keys=True),
+      asr_simple.format_json_like(exchange.request_body),
+      "",
+      "Response:",
+      f"HTTP {exchange.response_status if exchange.response_status is not None else 'N/A'}",
+      json.dumps(exchange.response_headers, indent=2, sort_keys=True),
+      exchange.response_body_text or "(empty)",
+    )
+  )
+  with VERBOSE_OUTPUT_LOCK:
+    print(message)
 
 
 def format_file_result(result: FileResult, *, mode: str) -> str:

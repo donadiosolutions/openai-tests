@@ -78,12 +78,26 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
   with pytest.raises(ValueError, match="Duplicate audio file stem"):
     asr_wer.discover_audio_files(duplicate_dir)
 
+  case_duplicate_dir = tmp_path / "case-dupes"
+  case_duplicate_dir.mkdir()
+  write_audio(case_duplicate_dir / "clip.wav")
+  write_audio(case_duplicate_dir / "Clip.mp3")
+  with pytest.raises(ValueError, match="Duplicate audio file stem"):
+    asr_wer.discover_audio_files(case_duplicate_dir)
+
   collision_dir = tmp_path / "collisions"
   collision_dir.mkdir()
   write_audio(collision_dir / "clip.wav")
   write_audio(collision_dir / "clip_normalized.wav")
   with pytest.raises(ValueError, match="Output artifact collision"):
     asr_wer.discover_audio_files(collision_dir)
+
+  case_collision_dir = tmp_path / "case-collisions"
+  case_collision_dir.mkdir()
+  write_audio(case_collision_dir / "Clip.wav")
+  write_audio(case_collision_dir / "clip_normalized.wav")
+  with pytest.raises(ValueError, match="Output artifact collision"):
+    asr_wer.discover_audio_files(case_collision_dir)
 
   reserved_dir = tmp_path / "reserved"
   reserved_dir.mkdir()
@@ -582,6 +596,31 @@ def test_verbose_completions_prints_http_exchange(
   assert "HTTP 200" in captured.out
 
 
+def test_verbose_exchange_uses_single_locked_print(monkeypatch: pytest.MonkeyPatch) -> None:
+  printed: list[str] = []
+
+  def fake_print(value: str = "") -> None:
+    printed.append(value)
+
+  monkeypatch.setattr("builtins.print", fake_print)
+  asr_wer.print_verbose_exchange(
+    asr_simple.HttpExchange(
+      method="POST",
+      url="https://example.com/v1/audio/transcriptions",
+      request_headers={"Authorization": "Bearer secret"},
+      request_body={"model": "gpt-asr"},
+      response_status=200,
+      response_headers={},
+      response_body_text='{"text":"Alpha"}',
+      response_json={"text": "Alpha"},
+    )
+  )
+
+  assert len(printed) == 1
+  assert "Request:\nPOST https://example.com/v1/audio/transcriptions" in printed[0]
+  assert "\nResponse:\nHTTP 200" in printed[0]
+
+
 def test_ground_skips_existing_exact_transcript_and_backfills_normalized(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
@@ -626,6 +665,37 @@ def test_ground_skip_uses_existing_normalized_transcript(
 
   assert result is not None
   assert result.normalized_transcript == "custom normalized"
+
+
+def test_ground_skip_backfill_uses_atomic_write(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio = write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "clip.txt").write_text("Raw transcript", encoding="utf-8")
+  normalized_path = ground_dir / "clip_normalized.txt"
+  calls: list[Path] = []
+
+  def fake_atomic_write_text(path: Path, text: str) -> None:
+    calls.append(path)
+    path.write_text(text, encoding="utf-8")
+
+  monkeypatch.setattr(asr_wer, "atomic_write_text", fake_atomic_write_text)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 2.0)
+
+  result = asr_wer.maybe_skip_ground_file(
+    build_args("ground", str(audio_dir)),
+    asr_wer.AudioInput(path=audio, stem="clip", format="wav"),
+    ground_dir,
+  )
+
+  assert result is not None
+  assert calls == [normalized_path]
+  assert normalized_path.read_text(encoding="utf-8") == "raw transcript"
 
 
 def test_ground_skip_records_duration_failure_without_aborting(
