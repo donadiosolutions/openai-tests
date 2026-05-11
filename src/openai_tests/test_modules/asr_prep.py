@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -82,6 +83,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def validate_overlap(overlap: float) -> float:
+  if not math.isfinite(overlap):
+    raise ValueError("overlap must be finite")
   if overlap < 0:
     raise ValueError("overlap must be at least 0 seconds")
   if overlap >= SEGMENT_DURATION_SECONDS:

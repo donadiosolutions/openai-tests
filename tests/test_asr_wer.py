@@ -1332,6 +1332,9 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   )
   assert write_failed.status == "failed"
   assert write_failed.error_message == "disk full"
+  assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=0.0) == (
+    "alpha repeated repeated bravo"
+  )
 
   duplicate_chunk_source = asr_wer.PreparedSource(
     audio=sources[0].audio,

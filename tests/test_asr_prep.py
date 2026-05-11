@@ -37,6 +37,8 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
     asr_prep.validate_overlap(-0.1)
   with pytest.raises(ValueError, match="overlap must be less than 30"):
     asr_prep.validate_overlap(30.0)
+  with pytest.raises(ValueError, match="overlap must be finite"):
+    asr_prep.validate_overlap(float("nan"))
 
   assert asr_prep.run(build_args(str(tmp_path / "missing"))) == 2
   assert "Audio directory does not exist" in capsys.readouterr().err

@@ -778,7 +778,7 @@ def build_prepared_source_result(
 
 def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
   stitched: list[str] = []
-  max_overlap_tokens = math.ceil(6 * overlap_seconds) + 6
+  max_overlap_tokens = 0 if overlap_seconds == 0 else math.ceil(6 * overlap_seconds) + 6
   for normalized in normalized_chunks:
     words = normalized.split()
     if not stitched:
