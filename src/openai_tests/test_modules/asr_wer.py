@@ -119,7 +119,14 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-  """Run batch ground generation or evaluation and return a CLI exit code."""
+  """
+  Execute a batch ground-generation or evaluation run driven by parsed CLI arguments.
+  
+  Performs argument validation and input/output resolution, processes either regular audio files or prepared (pre-chunked) sources, writes the run report, prints final statistics, and exits with a status code that reflects overall success.
+  
+  Returns:
+      int: 0 if all files were transcribed or skipped; 1 if any file failed during processing; 2 on configuration error detected before processing.
+  """
 
   try:
     validate_args(args)
@@ -172,7 +179,19 @@ def run(args: argparse.Namespace) -> int:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-  """Fail fast for argument combinations that cannot produce valid WER rows."""
+  """
+  Validate CLI argument combinations and raise a ValueError for any incompatible or invalid settings.
+  
+  This function enforces constraints needed to produce valid WER rows and valid endpoint requests, including:
+  - `batch` must be >= 1.
+  - `--overlap` may only be used when `--prep` is enabled.
+  - Mutually exclusive prompt flags for `transcriptions` vs `completions` endpoints.
+  - `transcriptions` must request a transcript-only response format (not `diarized_json`, `srt`, or `vtt`).
+  - Disallowed combinations for completions-specific flags when using batch audio.
+  
+  Raises:
+      ValueError: If any argument combination is invalid (see list above).
+  """
 
   if args.batch < 1:
     raise ValueError("batch must be at least 1")
@@ -285,7 +304,19 @@ def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
 
 
 def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | None) -> list[PreparedSource]:
-  """Load prep/manifest.json and return original source files grouped with chunks."""
+  """
+  Load and validate a prep manifest from audio_dir/prep/manifest.json and return reconstructed source audios with their ordered chunks.
+  
+  Parameters:
+    audio_dir (Path): Directory containing a "prep" subfolder with manifest and chunk files.
+    requested_overlap (float | None): If provided, must match the manifest's overlap_seconds within 0.001.
+  
+  Returns:
+    list[PreparedSource]: Ordered list of PreparedSource objects, each containing the original source AudioInput and an ordered tuple of PreparedChunk entries with timing and duration metadata.
+  
+  Raises:
+    ValueError: If the manifest file is missing, unreadable, malformed, or any manifest validation fails (including filename/stem checks, missing chunk files, nonpositive durations, duplicate or noncontiguous chunk indices, or timing inconsistencies). 
+  """
 
   manifest_path = audio_dir / "prep" / "manifest.json"
   if not manifest_path.is_file():
@@ -428,7 +459,23 @@ def validate_prepared_chunk_ranges(
   overlap: float,
   chunks: list[PreparedChunk],
 ) -> None:
-  """Validate that manifest chunk timing rebuilds the declared source duration."""
+  """
+  Ensure prepared chunks reconstruct the source timeline with the declared duration and overlap.
+  
+  Validates that:
+  - the first chunk starts at 0.0 (within 0.001s),
+  - the last chunk ends at `source_duration` (within 0.001s),
+  - each subsequent chunk's start matches the previous chunk's end minus `overlap` (within 0.001s).
+  
+  Parameters:
+      source_file (str): Source filename (used in error messages).
+      source_duration (float): Declared duration of the source in seconds.
+      overlap (float): Declared overlap in seconds between adjacent chunks.
+      chunks (list[PreparedChunk]): Chunk objects that should cover the source when stitched; each must have `index`, `start_seconds`, and `end_seconds`.
+  
+  Raises:
+      ValueError: If the chunks do not start at 0, do not end at `source_duration`, or contain a gap/misaligned boundary relative to `overlap`.
+  """
 
   sorted_chunks = sorted(chunks, key=lambda chunk: chunk.index)
   if not math.isclose(sorted_chunks[0].start_seconds, 0.0, rel_tol=0.0, abs_tol=0.001):
@@ -443,6 +490,19 @@ def validate_prepared_chunk_ranges(
 
 
 def require_manifest_string(row: dict[str, Any], key: str) -> str:
+  """
+  Validate and return a non-empty string field from a prepared manifest row.
+  
+  Parameters:
+      row (dict[str, Any]): A single manifest row (JSON object) to validate.
+      key (str): The required field name to extract from the row.
+  
+  Returns:
+      The value of `row[key]` as a non-empty string.
+  
+  Raises:
+      ValueError: If the key is missing, not a string, or an empty string.
+  """
   value = row.get(key)
   if not isinstance(value, str) or not value:
     raise ValueError(f"Prepared manifest row requires string {key}")
@@ -450,6 +510,21 @@ def require_manifest_string(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_filename(row: dict[str, Any], key: str) -> str:
+  """
+  Validate and return a manifest field as a plain filename.
+  
+  Parameters:
+      row (dict[str, Any]): A single manifest row mapping field names to values.
+      key (str): The key in `row` whose value should be validated as a plain filename.
+  
+  Returns:
+      str: The validated filename string.
+  
+  Raises:
+      ValueError: If the value is missing, not a string, or is not a plain filename
+          (absolute paths, path anchors, directory traversals like `..`, any of
+          '/', '\\', ':' characters, or the special values '.' or '..').
+  """
   value = require_manifest_string(row, key)
   if (
     Path(value).is_absolute()
@@ -468,6 +543,20 @@ def require_manifest_filename(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_stem(row: dict[str, Any], key: str) -> str:
+  """
+  Validate and return a plain filename stem extracted from a manifest row.
+  
+  Parameters:
+      row (dict[str, Any]): A manifest row dictionary.
+      key (str): The key in `row` whose value should be a plain filename stem.
+  
+  Returns:
+      str: The validated filename stem.
+  
+  Raises:
+      ValueError: If the value is not a plain filename stem (absolute paths, path anchors,
+                  path separators, colon characters, or special dot values are rejected).
+  """
   value = require_manifest_string(row, key)
   if (
     Path(value).is_absolute()
@@ -486,6 +575,19 @@ def require_manifest_stem(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_number(row: dict[str, Any], key: str) -> float:
+  """
+  Validate and return a numeric field from a manifest row.
+  
+  Parameters:
+      row (dict[str, Any]): A manifest row dictionary to validate.
+      key (str): The key whose value must be a finite number.
+  
+  Returns:
+      float: The value converted to a Python float.
+  
+  Raises:
+      ValueError: If the key is missing or its value is not a finite numeric (int/float, excluding booleans).
+  """
   value = row.get(key)
   if not isinstance(value, (int, float)) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires numeric {key}")
@@ -495,6 +597,19 @@ def require_manifest_number(row: dict[str, Any], key: str) -> float:
 
 
 def require_manifest_integer(row: dict[str, Any], key: str) -> int:
+  """
+  Validate and return an integer field from a manifest row.
+  
+  Parameters:
+      row (dict[str, Any]): Manifest row dictionary to read the field from.
+      key (str): Name of the required integer field.
+  
+  Returns:
+      int: The integer value stored under `key`.
+  
+  Raises:
+      ValueError: If the field is missing, not an integer, or is a boolean.
+  """
   value = row.get(key)
   if not isinstance(value, int) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires integer {key}")
@@ -502,7 +617,19 @@ def require_manifest_integer(row: dict[str, Any], key: str) -> int:
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
-  """Build the requested output directory for the selected run mode."""
+  """
+  Resolve the filesystem path to the output directory for the current run mode.
+  
+  Parameters:
+      args (argparse.Namespace): Parsed CLI arguments; `args.mode` selects either "ground" or "eval".
+      audio_dir (Path): Directory containing input audio (and the `ground` subdirectory when evaluating).
+  
+  Returns:
+      Path: The directory to use for output artifacts. For `mode == "ground"` this is `audio_dir/ground`; otherwise it is a new eval directory named with the resolved model and a timestamp.
+  
+  Raises:
+      ValueError: If `args.mode` is not "ground" and the `audio_dir/ground` directory does not exist.
+  """
 
   if args.mode == "ground":
     return audio_dir / "ground"
@@ -583,7 +710,21 @@ def process_audio_files(
   base_url: str,
   api_key: str | None,
 ) -> list[FileResult]:
-  """Process files with bounded concurrency while preserving input order."""
+  """
+  Process a list of audio inputs with bounded concurrency and return per-file results in the original input order.
+  
+  Processes each item in `audio_files` using up to `args.batch` worker threads, skipping inputs that are already completed when operating in ground-generation mode; prints progress lines as each file is skipped or processed.
+  
+  Parameters:
+      args (argparse.Namespace): Runtime options (must include `mode` and `batch`) that control skipping behavior and concurrency.
+      audio_files (list[AudioInput]): Ordered list of audio inputs to process.
+      output_dir (Path): Directory where per-file artifacts will be written.
+      base_url (str): Base URL for the endpoint used to transcribe audio.
+      api_key (str | None): Optional API key to authenticate requests.
+  
+  Returns:
+      list[FileResult]: Per-file results corresponding one-for-one with `audio_files`, preserved in the same order.
+  """
 
   results_by_name: dict[str, FileResult] = {}
   futures: dict[Future[FileResult], AudioInput] = {}
@@ -623,7 +764,18 @@ def process_prepared_sources(
   base_url: str,
   api_key: str | None,
 ) -> list[FileResult]:
-  """Transcribe prepared chunks with shared concurrency and stitch by source."""
+  """
+  Transcribe pre-chunked audio sources in parallel, write per-chunk transcript files, and stitch per-source exact and normalized transcripts.
+  
+  For each PreparedSource this function:
+  - Writes per-chunk transcripts to output_dir/chunks/{chunk_stem}.txt.
+  - Produces stitched artifacts {stem}.txt and {stem}_normalized.txt (or a failed FileResult on errors).
+  - Preserves skip behavior for sources that already have both stitched artifacts.
+  - Records elapsed processing time and sets `chunk_count` on each returned FileResult.
+  
+  Returns:
+      list[FileResult]: FileResult for each PreparedSource in the same order as `prepared_sources`.
+  """
 
   chunks_dir_error = prepare_prepared_chunks_output_dir(output_dir)
   if chunks_dir_error is not None:
@@ -664,6 +816,13 @@ def process_prepared_sources(
       next_chunk_index = 0
 
       def submit_next_chunk() -> None:
+        """
+        Submit the next prepared chunk to the executor for transcription if any remain.
+        
+        Schedules the next chunk from `chunks_to_submit` on the thread pool, increments
+        the local `next_chunk_index`, and records the returned future in `futures`
+        mapped to its corresponding chunk.
+        """
         nonlocal next_chunk_index
         if next_chunk_index >= len(chunks_to_submit):
           return
@@ -729,7 +888,19 @@ def transcribe_prepared_chunk(
   started_by_source: dict[str, float],
   timing_lock: threading.Lock,
 ) -> str:
-  """Transcribe one prepared chunk and mark its source start at worker execution time."""
+  """
+  Transcribes a single prepared chunk and records the source's start time when processing begins.
+  
+  If the source has not yet been marked, sets started_by_source[chunk.source.path.name] to the current perf_counter under timing_lock.
+  
+  Parameters:
+      chunk (PreparedChunk): The prepared chunk to transcribe.
+      started_by_source (dict[str, float]): Mapping updated with the source start time if not already present.
+      timing_lock (threading.Lock): Lock used to synchronize access to started_by_source.
+  
+  Returns:
+      str: The transcript text for the chunk.
+  """
 
   with timing_lock:
     if chunk.source.path.name not in started_by_source:
@@ -738,7 +909,12 @@ def transcribe_prepared_chunk(
 
 
 def prepare_prepared_chunks_output_dir(output_dir: Path) -> str | None:
-  """Create the prepared chunk audit directory or return a controlled failure message."""
+  """
+  Ensure the output directory's "chunks" subdirectory exists, creating it if necessary.
+  
+  Returns:
+      None if the "chunks" directory was created or already exists; otherwise a string with a human-readable error message describing the failure.
+  """
 
   chunks_dir = output_dir / "chunks"
   if chunks_dir.exists() and not chunks_dir.is_dir():
@@ -755,7 +931,19 @@ def maybe_skip_prepared_ground_file(
   source: PreparedSource,
   output_dir: Path,
 ) -> FileResult | None:
-  """Skip prepared ground only when combined exact and normalized artifacts exist."""
+  """
+  Return a skipped FileResult when both exact and normalized stitched artifacts already exist for a prepared source.
+  
+  Parameters:
+      args (argparse.Namespace): Parsed CLI/runtime arguments; skipping only applies when `args.mode == "ground"`.
+      source (PreparedSource): Prepared source metadata whose stitched artifacts would be checked.
+      output_dir (Path): Directory containing per-source output artifacts.
+  
+  Returns:
+      FileResult: A result with `status == "skipped"` when both `{stem}.txt` and `{stem}_normalized.txt` exist and were read successfully.
+      FileResult: A failed result if both artifacts exist but cannot be read.
+      None: If skipping is not applicable (not in ground mode or one or both artifacts are missing).
+  """
 
   exact_path = output_dir / f"{source.audio.stem}.txt"
   normalized_path = output_dir / f"{source.audio.stem}_normalized.txt"
@@ -799,6 +987,22 @@ def build_prepared_source_result(
   chunk_errors: list[str],
   elapsed_seconds: float,
 ) -> FileResult:
+  """
+  Build the final FileResult for a prepared source by stitching chunk transcripts, writing per-source artifacts, and optionally adding evaluation scores.
+  
+  If any chunk transcripts are missing or there are recorded chunk errors, returns a failed FileResult describing the problems. Otherwise stitches ordered chunk transcripts into a single exact transcript and a normalized transcript (deduplicating overlap), atomically writes both output files under output_dir, and returns a successful FileResult with timing and word-count metadata. If args.mode == "eval", attempts to attach WER scores; scoring exceptions are converted into a failed FileResult that preserves chunk_count and other fields.
+  
+  Parameters:
+      args (argparse.Namespace): Parsed CLI arguments; used only to determine eval mode.
+      source (PreparedSource): The prepared source being reconstructed and written.
+      output_dir (Path): Directory where per-source artifacts ({stem}.txt and {stem}_normalized.txt) will be written.
+      chunk_transcripts (dict[int, str]): Mapping from chunk index to that chunk's transcript.
+      chunk_errors (list[str]): Collected error messages from chunk transcription workers.
+      elapsed_seconds (float): Wall elapsed seconds spent transcribing this source (may be 0).
+  
+  Returns:
+      FileResult: A FileResult representing the per-source outcome. On success, status is "transcribed" and output paths/word counts/rtfx are populated; on failure, status is "failed" and error_message explains the reason. The returned FileResult's chunk_count is set to the number of chunks for the source.
+  """
   exact_path = output_dir / f"{source.audio.stem}.txt"
   normalized_path = output_dir / f"{source.audio.stem}_normalized.txt"
   if chunk_errors or len(chunk_transcripts) != len(source.chunks):
@@ -874,6 +1078,16 @@ def build_prepared_source_result(
 
 
 def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
+  """
+  Stitches normalized transcript chunks into a single normalized transcript by removing duplicated tokens across chunk boundaries.
+  
+  Parameters:
+      normalized_chunks (list[str]): Ordered normalized transcript text for each chunk (tokens separated by whitespace).
+      overlap_seconds (float): Overlap duration in seconds that was used when creating chunks; used to bound how many tokens may be duplicated at chunk edges.
+  
+  Returns:
+      str: A single normalized transcript formed by joining chunks with duplicated overlap tokens removed, separated by single spaces.
+  """
   stitched: list[str] = []
   max_overlap_tokens = (
     0 if overlap_seconds == 0 else math.ceil(OVERLAP_TOKEN_RATE_PER_SECOND * overlap_seconds) + OVERLAP_TOKEN_BUFFER
@@ -894,7 +1108,14 @@ def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_secon
 
 
 def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, output_dir: Path) -> FileResult | None:
-  """Return an existing ground transcript result when reruns can skip a file."""
+  """
+  Checks whether an existing ground transcript can be reused and, if so, returns a corresponding skipped FileResult.
+  
+  If args.mode == "ground" and an exact transcript file for the audio exists in output_dir, this function reads the exact transcript, ensures a normalized transcript exists (writing one atomically if missing), reads the audio duration, and returns a FileResult with status "skipped" and populated transcript/word-count/timing fields. If the conditions to skip are not met, returns None. If reading/writing files or obtaining duration fails, returns a failed FileResult describing the error.
+   
+  Returns:
+      FileResult | None: A `FileResult` with status `"skipped"` when an existing ground transcript is reused; `None` when no skip applies. On I/O or duration errors, returns a `FileResult` with status `"failed"` describing the error.
+  """
 
   exact_path = output_dir / f"{audio_file.stem}.txt"
   normalized_path = output_dir / f"{audio_file.stem}_normalized.txt"
@@ -939,7 +1160,24 @@ def transcribe_audio_file(
   base_url: str,
   api_key: str | None,
 ) -> FileResult:
-  """Transcribe one file, write outputs, and attach eval scores when needed."""
+  """
+  Transcribe a single audio input, write exact and normalized transcript files, and optionally compute WER scores.
+  
+  This function:
+  - Obtains the audio duration, requests a transcript from the selected endpoint, normalizes the transcript, and atomically writes two files into `output_dir`: `{stem}.txt` and `{stem}_normalized.txt`.
+  - Builds and returns a FileResult capturing timing, word counts, output paths, and any error text.
+  - If `args.mode == "eval"`, attempts to attach WER fields by calling `add_eval_scores`; on scoring failure it returns a `failed` FileResult containing the scoring error.
+  
+  Parameters:
+      args (argparse.Namespace): Parsed CLI arguments (controls mode, endpoint selection, and other request configuration).
+      audio_file (AudioInput): Source audio metadata (path, stem, format).
+      output_dir (Path): Directory where transcript artifacts will be written.
+      base_url (str): Base URL for the API endpoint used for transcription.
+      api_key (str | None): Optional API key for the transcription endpoint.
+  
+  Returns:
+      FileResult: Result record for the audio file including status (`transcribed` or `failed`), paths to written artifacts, timing (`elapsed_seconds`, `duration_seconds`, `rtfx`), word counts, and any evaluation fields when in eval mode.
+  """
 
   exact_path = output_dir / f"{audio_file.stem}.txt"
   normalized_path = output_dir / f"{audio_file.stem}_normalized.txt"
@@ -1024,7 +1262,21 @@ def build_failed_file_result(
   duration_seconds: float = 0.0,
   chunk_count: int | None = None,
 ) -> FileResult:
-  """Construct a standard failed result for pre-request per-file errors."""
+  """
+  Builds a FileResult representing a failed transcription for a given audio file.
+  
+  Parameters:
+    audio_file (AudioInput): Source audio metadata for the failed file.
+    output_path (Path): Intended path for the exact transcript file.
+    normalized_output_path (Path): Intended path for the normalized transcript file.
+    elapsed_seconds (float | None): Wall-clock seconds spent before failure, or None if unknown.
+    error_message (str): Human-readable error description to store on the result.
+    duration_seconds (float): Known duration of the source audio in seconds (default 0.0).
+    chunk_count (int | None): Number of prep chunks for this source when running in prep mode, or None.
+  
+  Returns:
+    FileResult: A FileResult with status set to `"failed"`, empty transcript fields, word counts set to 0, and provided timing, paths, and error metadata.
+  """
 
   return FileResult(
     audio=audio_file,
@@ -1135,7 +1387,19 @@ def transcribe_with_transcriptions(
 
 
 def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespace:
-  """Derive per-file completions arguments from batch-level arguments."""
+  """
+  Produce a per-file completions request arguments namespace with defaults and prep-specific overrides.
+  
+  Parameters:
+      args (argparse.Namespace): Batch-level CLI arguments used to derive per-file completions request values.
+  
+  Returns:
+      argparse.Namespace: A copy of `args` with defaults applied and mappings for completions requests:
+          - ensures `system_prompt`, `developer_prompt`, and `user_prompt` have defaults when unset
+          - maps `prompt` to `developer_prompt` when provided
+          - maps `service_tier` to `completions_service_tier` when set
+          - forces `completions_temperature` to `0.0` when `prep` is enabled and temperature is unset
+  """
 
   request_args = argparse.Namespace(**vars(args))
   if request_args.system_prompt is None:
@@ -1154,7 +1418,15 @@ def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespa
 
 
 def build_transcriptions_request_args(args: argparse.Namespace) -> argparse.Namespace:
-  """Derive transcriptions arguments with the ASR-specific model fallback."""
+  """
+  Prepare a copy of CLI arguments adjusted for transcription requests.
+  
+  Parameters:
+      args (argparse.Namespace): Original parsed CLI arguments.
+  
+  Returns:
+      argparse.Namespace: A shallow copy of `args` with `transcriptions_model` set from endpoint resolution, `model` cleared, `transcriptions_prompt` populated from `prompt` when present, and `transcriptions_temperature` forced to 0.0 when `prep` is enabled and the transcription temperature was not explicitly set.
+  """
 
   request_args = argparse.Namespace(**vars(args))
   request_args.transcriptions_model = resolve_endpoint_model(args)
@@ -1167,7 +1439,18 @@ def build_transcriptions_request_args(args: argparse.Namespace) -> argparse.Name
 
 
 def add_eval_scores(result: FileResult, *, audio_file: AudioInput) -> FileResult:
-  """Attach WER metrics by comparing a hypothesis to normalized ground text."""
+  """
+  Add word-error-rate (WER) fields to a FileResult by comparing its normalized transcript to the ground normalized transcript on disk.
+  
+  Reads the reference from the file at `audio_file.path.parent/ground/{audio_file.stem}_normalized.txt`, computes plain-word WER against `result.normalized_transcript`, and returns a new FileResult preserving all original fields but with `reference_word_count`, `wer_errors`, `wer_reference_words`, and `wer` populated.
+  
+  Parameters:
+      result (FileResult): The per-file result whose normalized transcript will be scored.
+      audio_file (AudioInput): Source audio descriptor used to locate the ground reference file.
+  
+  Returns:
+      FileResult: A copy of `result` with WER-related fields filled (`reference_word_count`, `wer_errors`, `wer_reference_words`, `wer`) and other fields preserved.
+  """
 
   reference = audio_file.path.parent / "ground" / f"{audio_file.stem}_normalized.txt"
   reference_text = reference.read_text(encoding="utf-8")
@@ -1372,7 +1655,14 @@ def write_report(
 
 
 def resolve_report_service_tier(args: argparse.Namespace) -> str:
-  """Return the effective service tier represented by report metadata."""
+  """
+  Determine the service tier to record in the run report.
+  
+  Prefers `args.service_tier` if set; if unset and `args.endpoint == "completions"`, uses `args.completions_service_tier` if set; otherwise yields `"none"`.
+  
+  Returns:
+      The chosen service tier as a string, or `"none"` if no tier is specified.
+  """
 
   if args.service_tier is not None:
     return str(args.service_tier)
@@ -1382,7 +1672,14 @@ def resolve_report_service_tier(args: argparse.Namespace) -> str:
 
 
 def resolve_report_temperature(args: argparse.Namespace) -> str:
-  """Return the effective selected-endpoint temperature for report metadata."""
+  """
+  Resolve the effective temperature value to record in the run report.
+  
+  Considers the selected endpoint and explicit temperature overrides; when no explicit temperature is set, returns "0.0" if prep mode is enabled, otherwise "provider_default".
+  
+  Returns:
+      str: The effective temperature as a string — an explicit numeric temperature if provided, otherwise "0.0" or "provider_default".
+  """
 
   if args.endpoint == "completions":
     if args.completions_temperature is not None:
@@ -1394,6 +1691,16 @@ def resolve_report_temperature(args: argparse.Namespace) -> str:
 
 
 def resolve_report_prep_overlap(args: argparse.Namespace, results: list[FileResult]) -> str:
+  """
+  Determine the printable prep overlap value used in report metadata.
+  
+  Parameters:
+      args: CLI arguments; checks `args.prep`, `args._prep_overlap_seconds`, and `args.overlap`.
+      results: Ignored (present for call-site compatibility).
+  
+  Returns:
+      A string: `"none"` if prep is not enabled; otherwise the overlap seconds as a string, or `"unknown"` if no overlap is available.
+  """
   del results
   if not getattr(args, "prep", False):
     return "none"
@@ -1401,6 +1708,21 @@ def resolve_report_prep_overlap(args: argparse.Namespace, results: list[FileResu
 
 
 def resolve_report_prep_segment_duration(args: argparse.Namespace, results: list[FileResult]) -> str:
+  """
+  Resolve the prep segment duration value to display in the run report.
+  
+  If prep mode is disabled on args, returns the literal string "none".
+  If prep mode is enabled, returns the segment duration seconds from
+  args._prep_segment_duration_seconds converted to a string (defaults to 30.0).
+  
+  Parameters:
+      args (argparse.Namespace): Parsed CLI arguments; may contain `prep` (bool)
+          and `_prep_segment_duration_seconds` (float).
+      results (list[FileResult]): Ignored; present for call-site compatibility.
+  
+  Returns:
+      str: `"none"` when prep is not enabled, otherwise the segment duration in seconds as a string.
+  """
   del results
   if not getattr(args, "prep", False):
     return "none"
@@ -1408,7 +1730,14 @@ def resolve_report_prep_segment_duration(args: argparse.Namespace, results: list
 
 
 def has_report_prompt(args: argparse.Namespace) -> bool:
-  """Return whether the run used an explicit prompt option."""
+  """
+  Determine if any prompt-related option was provided for the run.
+  
+  Checks `args.prompt` always; if `args.endpoint == "transcriptions"` checks `args.transcriptions_prompt`; otherwise checks `args.system_prompt`, `args.developer_prompt`, and `args.user_prompt`.
+  
+  Returns:
+      `true` if any prompt option was set, `false` otherwise.
+  """
 
   if args.prompt is not None:
     return True
@@ -1418,7 +1747,15 @@ def has_report_prompt(args: argparse.Namespace) -> bool:
 
 
 def render_report_header(*, eval_mode: bool) -> str:
-  """Render the tab-separated report header."""
+  """
+  Render the TSV report header row with columns appropriate for evaluation mode.
+  
+  Parameters:
+      eval_mode (bool): If True, include evaluation-specific columns (`reference_words`, `WER`, `wer_errors`, `wer_reference_words`).
+  
+  Returns:
+      str: Tab-separated header row.
+  """
 
   columns = [
     "file",
@@ -1437,7 +1774,21 @@ def render_report_header(*, eval_mode: bool) -> str:
 
 
 def render_report_row(result: FileResult, *, eval_mode: bool) -> str:
-  """Render one tab-separated report row."""
+  """
+  Render a tab-separated values (TSV) row summarizing a FileResult.
+  
+  Parameters:
+      result (FileResult): The per-file result record to render.
+      eval_mode (bool): If True, append WER-related columns (reference word count, WER percentage,
+          WER errors, WER reference words).
+  
+  Returns:
+      str: A single TSV row string with these columns in order:
+          filename, status, chunk_count (empty if None), elapsed_seconds (empty if None),
+          duration_seconds, rtfx (empty if None), exact_word_count, normalized_word_count,
+          (when eval_mode is True) reference_word_count, wer (formatted as a percentage, empty if None),
+          wer_errors, wer_reference_words, output_path, error_message (empty if None).
+  """
 
   columns = [
     sanitize_output_field(result.audio.path.name),
