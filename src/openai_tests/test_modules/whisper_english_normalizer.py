@@ -1,3 +1,5 @@
+"""English transcript normalization for ASR WER comparison."""
+
 from __future__ import annotations
 
 # Adapted from the English-only behavior of huggingface/open_asr_leaderboard
@@ -83,7 +85,11 @@ NUMBER_WORDS = {
 
 
 class EnglishTextNormalizer:
+  """Apply a compact English Whisper-style transcript normalization pipeline."""
+
   def __call__(self, value: str) -> str:
+    """Normalize text for fair word-level ASR comparison."""
+
     value = normalize_apostrophes(value.lower())
     value = remove_bracketed_text(value)
     value = re.sub(r"\b(hmm|mm|mhm|mmm|uh|um)\b", " ", value)
@@ -98,15 +104,21 @@ class EnglishTextNormalizer:
 
 
 def normalize_apostrophes(value: str) -> str:
+  """Map curly apostrophes to ASCII apostrophes before contraction handling."""
+
   return value.replace("\N{RIGHT SINGLE QUOTATION MARK}", "'").replace("\N{LEFT SINGLE QUOTATION MARK}", "'")
 
 
 def remove_bracketed_text(value: str) -> str:
+  """Drop bracketed and parenthesized annotations from transcripts."""
+
   value = re.sub(r"[<\[][^>\]]*[>\]]", "", value)
   return re.sub(r"\(([^)]+?)\)", "", value)
 
 
 def remove_symbols_and_diacritics(value: str) -> str:
+  """Remove punctuation and diacritics while preserving word boundaries."""
+
   normalized = unicodedata.normalize("NFKD", value.replace("-", " "))
   characters = []
   for character in normalized:
@@ -118,6 +130,8 @@ def remove_symbols_and_diacritics(value: str) -> str:
 
 
 def normalize_number_words(words: list[str]) -> list[str]:
+  """Normalize simple English number words to digit tokens."""
+
   normalized: list[str] = []
   index = 0
   while index < len(words):

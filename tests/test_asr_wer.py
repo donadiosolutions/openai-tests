@@ -184,6 +184,37 @@ def test_ground_transcriptions_writes_exact_and_normalized_outputs(
   assert sent_fields[0]["service_tier"] == "flex"
 
 
+def test_default_transcriptions_payload_uses_asr_model(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  sent_fields: list[dict[str, object]] = []
+
+  def fake_send_multipart_request(**kwargs: object) -> asr_simple.HttpExchange:
+    fields = kwargs["fields"]
+    assert isinstance(fields, Mapping)
+    sent_fields.append({str(key): value for key, value in fields.items()})
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={},
+      request_body=kwargs["fields"],
+      response_status=200,
+      response_headers={"Content-Type": "application/json"},
+      response_body_text='{"text":"Alpha"}',
+      response_json={"text": "Alpha"},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 1.0)
+
+  assert asr_wer.run(build_args("ground", str(audio_dir))) == 0
+  assert sent_fields[0]["model"] == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
+
+
 def test_ground_skips_existing_exact_transcript_and_backfills_normalized(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
@@ -253,6 +284,28 @@ def test_ground_skip_records_duration_failure_without_aborting(
   assert result is not None
   assert result.status == "failed"
   assert result.error_message == "bad audio"
+
+
+def test_ground_skip_records_corrupt_cached_transcript_without_aborting(
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio = write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "clip.txt").write_bytes(b"\xff")
+
+  result = asr_wer.maybe_skip_ground_file(
+    build_args("ground", str(audio_dir)),
+    asr_wer.AudioInput(path=audio, stem="clip", format="wav"),
+    ground_dir,
+  )
+
+  assert result is not None
+  assert result.status == "failed"
+  assert result.error_message is not None
+  assert "decode" in result.error_message
 
 
 def test_eval_requires_ground_before_sending_requests(
@@ -411,6 +464,7 @@ def test_transcribe_audio_file_records_failures_and_eval_scores(
 
   assert result.status == "failed"
   assert result.error_message == "provider failed"
+  assert result.duration_seconds == 3.0
   assert result.wer == 1.0
   assert "error=provider failed" in asr_wer.format_file_result(result, mode="eval")
 
@@ -441,6 +495,33 @@ def test_transcribe_audio_file_records_duration_failures_before_requests(
 
   assert result.status == "failed"
   assert result.error_message == "bad audio"
+
+
+def test_transcribe_audio_file_records_eval_ground_read_failures(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio_path = write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "clip_normalized.txt").write_bytes(b"\xff")
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 2.0)
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **kwargs: "Alpha")
+
+  result = asr_wer.transcribe_audio_file(
+    args=build_args("eval", str(audio_dir)),
+    audio_file=asr_wer.AudioInput(path=audio_path, stem="clip", format="wav"),
+    output_dir=tmp_path / "out",
+    base_url="https://example.com",
+    api_key=None,
+  )
+
+  assert result.status == "failed"
+  assert result.error_message is not None
+  assert "decode" in result.error_message
+  assert result.duration_seconds == 2.0
 
 
 def test_endpoint_helpers_raise_on_error_responses(
@@ -502,6 +583,33 @@ def test_plain_wer_and_normalizer_regressions() -> None:
   assert asr_wer.compute_plain_word_error_rate("", "") == (0, 0, 0.0)
   assert asr_wer.compute_plain_word_error_rate("", "hallucinated speech") == (2, 0, 1.0)
   assert asr_wer.compute_aggregate_wer(errors=2, reference_words=0) == 1.0
+  skipped = asr_wer.FileResult(
+    audio=asr_wer.AudioInput(path=Path("skipped.wav"), stem="skipped", format="wav"),
+    status="skipped",
+    transcript="Alpha",
+    normalized_transcript="alpha",
+    output_path=Path("skipped.txt"),
+    normalized_output_path=Path("skipped_normalized.txt"),
+    elapsed_seconds=None,
+    duration_seconds=100.0,
+    rtfx=None,
+    exact_word_count=1,
+    normalized_word_count=1,
+  )
+  transcribed = asr_wer.FileResult(
+    audio=asr_wer.AudioInput(path=Path("transcribed.wav"), stem="transcribed", format="wav"),
+    status="transcribed",
+    transcript="Bravo",
+    normalized_transcript="bravo",
+    output_path=Path("transcribed.txt"),
+    normalized_output_path=Path("transcribed_normalized.txt"),
+    elapsed_seconds=1.0,
+    duration_seconds=10.0,
+    rtfx=10.0,
+    exact_word_count=1,
+    normalized_word_count=1,
+  )
+  assert asr_wer.compute_aggregate_rtfx([skipped, transcribed], wall_elapsed_seconds=2.0) == 5.0
   assert asr_wer.normalize_transcript("Um, I can\u2019t analyse the colour in caf\u00e9 number twenty-one.") == (
     "i can not analyze the color in cafe number 21"
   )

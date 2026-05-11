@@ -1,3 +1,5 @@
+"""Batch ASR transcription and WER reporting module."""
+
 from __future__ import annotations
 
 import argparse
@@ -20,6 +22,8 @@ TRANSCRIPT_NORMALIZER = EnglishTextNormalizer()
 
 @dataclass(frozen=True, slots=True)
 class AudioInput:
+  """Supported direct-child audio file selected for a batch run."""
+
   path: Path
   stem: str
   format: str
@@ -27,6 +31,8 @@ class AudioInput:
 
 @dataclass(frozen=True, slots=True)
 class FileResult:
+  """Per-file transcript, timing, scoring, and output metadata."""
+
   audio: AudioInput
   status: str
   transcript: str
@@ -46,6 +52,8 @@ class FileResult:
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
+  """Register the asr-wer command-line arguments."""
+
   parser.add_argument("mode", choices=("ground", "eval"), help="Create ground transcripts or evaluate against them.")
   parser.add_argument("audio_dir", help="Directory containing supported audio files.")
   parser.add_argument(
@@ -73,6 +81,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+  """Run batch ground generation or evaluation and return a CLI exit code."""
+
   try:
     validate_args(args)
     audio_dir = Path(args.audio_dir)
@@ -109,6 +119,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+  """Fail fast for argument combinations that cannot produce valid WER rows."""
+
   if args.batch < 1:
     raise ValueError("batch must be at least 1")
   if args.prompt and args.endpoint == "transcriptions" and args.transcriptions_prompt:
@@ -123,6 +135,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def validate_endpoint_request_config(args: argparse.Namespace) -> None:
+  """Parse selected endpoint options once before any network requests are sent."""
+
   if args.endpoint == "completions":
     request_args = build_completions_request_args(args)
     asr_simple.build_completions_request_config(request_args, b"", "wav")
@@ -132,6 +146,8 @@ def validate_endpoint_request_config(args: argparse.Namespace) -> None:
 
 
 def has_explicit_completions_prompt_override(args: argparse.Namespace) -> bool:
+  """Return whether completions options replace the default audio prompt."""
+
   return any(
     getattr(args, name) is not None
     for name in ("system_prompt", "developer_prompt", "user_prompt", "completions_messages_json")
@@ -139,6 +155,8 @@ def has_explicit_completions_prompt_override(args: argparse.Namespace) -> bool:
 
 
 def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
+  """Return sorted supported audio files and reject ambiguous input sets."""
+
   if not audio_dir.exists():
     raise ValueError(f"Audio directory does not exist: {audio_dir}")
   if not audio_dir.is_dir():
@@ -162,6 +180,8 @@ def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
+  """Build the requested output directory for the selected run mode."""
+
   if args.mode == "ground":
     return audio_dir / "ground"
   ground_dir = audio_dir / "ground"
@@ -172,6 +192,8 @@ def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
 
 
 def create_output_dir(args: argparse.Namespace, requested_output_dir: Path) -> Path:
+  """Create the output directory, suffixing eval directories on collision."""
+
   if args.mode == "ground":
     requested_output_dir.mkdir(parents=True, exist_ok=True)
     return requested_output_dir
@@ -188,6 +210,8 @@ def create_output_dir(args: argparse.Namespace, requested_output_dir: Path) -> P
 
 
 def validate_eval_ground(audio_dir: Path, audio_files: list[AudioInput]) -> None:
+  """Ensure eval mode has a normalized ground transcript for every file."""
+
   ground_dir = audio_dir / "ground"
   missing = [
     audio_file.stem for audio_file in audio_files if not (ground_dir / f"{audio_file.stem}_normalized.txt").is_file()
@@ -197,6 +221,8 @@ def validate_eval_ground(audio_dir: Path, audio_files: list[AudioInput]) -> None
 
 
 def resolve_endpoint_model(args: argparse.Namespace) -> str:
+  """Resolve the model name for reports and output directory naming."""
+
   if args.endpoint == "completions":
     return asr_simple.resolve_model(args.completions_model or args.model)
   fallback_model = asr_simple.resolve_model(args.model) if args.model is not None else None
@@ -214,6 +240,8 @@ def process_audio_files(
   base_url: str,
   api_key: str | None,
 ) -> list[FileResult]:
+  """Process files with bounded concurrency while preserving input order."""
+
   results_by_name: dict[str, FileResult] = {}
   futures: dict[Future[FileResult], AudioInput] = {}
   with tqdm(total=len(audio_files), unit="file") as progress:
@@ -245,17 +273,19 @@ def process_audio_files(
 
 
 def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, output_dir: Path) -> FileResult | None:
+  """Return an existing ground transcript result when reruns can skip a file."""
+
   exact_path = output_dir / f"{audio_file.stem}.txt"
   normalized_path = output_dir / f"{audio_file.stem}_normalized.txt"
   if args.mode != "ground" or not exact_path.is_file():
     return None
-  transcript = exact_path.read_text(encoding="utf-8")
-  normalized = (
-    normalized_path.read_text(encoding="utf-8") if normalized_path.is_file() else normalize_transcript(transcript)
-  )
-  if not normalized_path.is_file():
-    normalized_path.write_text(normalized, encoding="utf-8")
   try:
+    transcript = exact_path.read_text(encoding="utf-8")
+    normalized = (
+      normalized_path.read_text(encoding="utf-8") if normalized_path.is_file() else normalize_transcript(transcript)
+    )
+    if not normalized_path.is_file():
+      normalized_path.write_text(normalized, encoding="utf-8")
     duration = get_audio_duration_seconds(audio_file.path)
   except Exception as exc:
     return build_failed_file_result(
@@ -288,9 +318,12 @@ def transcribe_audio_file(
   base_url: str,
   api_key: str | None,
 ) -> FileResult:
+  """Transcribe one file, write outputs, and attach eval scores when needed."""
+
   exact_path = output_dir / f"{audio_file.stem}.txt"
   normalized_path = output_dir / f"{audio_file.stem}_normalized.txt"
   started_at = time.perf_counter()
+  duration = 0.0
   try:
     duration = get_audio_duration_seconds(audio_file.path)
     transcript = transcribe_with_selected_endpoint(
@@ -309,7 +342,6 @@ def transcribe_audio_file(
     elapsed = max(time.perf_counter() - started_at, 0.0)
     transcript = ""
     normalized = ""
-    duration = 0.0
     status = "failed"
     error_message = str(exc)
 
@@ -328,7 +360,23 @@ def transcribe_audio_file(
     error_message=error_message,
   )
   if args.mode == "eval":
-    return add_eval_scores(result, audio_file=audio_file)
+    try:
+      return add_eval_scores(result, audio_file=audio_file)
+    except Exception as exc:
+      return FileResult(
+        audio=result.audio,
+        status="failed",
+        transcript=result.transcript,
+        normalized_transcript=result.normalized_transcript,
+        output_path=result.output_path,
+        normalized_output_path=result.normalized_output_path,
+        elapsed_seconds=result.elapsed_seconds,
+        duration_seconds=result.duration_seconds,
+        rtfx=result.rtfx,
+        exact_word_count=result.exact_word_count,
+        normalized_word_count=result.normalized_word_count,
+        error_message=str(exc),
+      )
   return result
 
 
@@ -340,6 +388,8 @@ def build_failed_file_result(
   elapsed_seconds: float | None,
   error_message: str,
 ) -> FileResult:
+  """Construct a standard failed result for pre-request per-file errors."""
+
   return FileResult(
     audio=audio_file,
     status="failed",
@@ -363,6 +413,8 @@ def transcribe_with_selected_endpoint(
   base_url: str,
   api_key: str | None,
 ) -> str:
+  """Dispatch one audio file to the selected transcription endpoint."""
+
   if args.endpoint == "completions":
     return transcribe_with_completions(args=args, audio_file=audio_file, base_url=base_url, api_key=api_key)
   return transcribe_with_transcriptions(args=args, audio_file=audio_file, base_url=base_url, api_key=api_key)
@@ -375,6 +427,8 @@ def transcribe_with_completions(
   base_url: str,
   api_key: str | None,
 ) -> str:
+  """Send one audio file through the chat completions transcription path."""
+
   request_args = build_completions_request_args(args)
   payload = asr_simple.prune_none(
     asr_simple.build_completions_request_config(request_args, audio_file.path.read_bytes(), audio_file.format)
@@ -408,6 +462,8 @@ def transcribe_with_transcriptions(
   base_url: str,
   api_key: str | None,
 ) -> str:
+  """Send one audio file through the multipart transcriptions endpoint."""
+
   request_args = build_transcriptions_request_args(args)
   payload = asr_simple.prune_none(asr_simple.build_transcriptions_request_config(request_args))
   if args.service_tier is not None:
@@ -438,6 +494,8 @@ def transcribe_with_transcriptions(
 
 
 def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespace:
+  """Derive per-file completions arguments from batch-level arguments."""
+
   request_args = argparse.Namespace(**vars(args))
   request_args.system_prompt = request_args.system_prompt or asr_simple.DEFAULT_SYSTEM_PROMPT
   request_args.developer_prompt = (
@@ -450,13 +508,19 @@ def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespa
 
 
 def build_transcriptions_request_args(args: argparse.Namespace) -> argparse.Namespace:
+  """Derive transcriptions arguments with the ASR-specific model fallback."""
+
   request_args = argparse.Namespace(**vars(args))
+  request_args.transcriptions_model = resolve_endpoint_model(args)
+  request_args.model = None
   if request_args.prompt is not None:
     request_args.transcriptions_prompt = request_args.prompt
   return request_args
 
 
 def add_eval_scores(result: FileResult, *, audio_file: AudioInput) -> FileResult:
+  """Attach WER metrics by comparing a hypothesis to normalized ground text."""
+
   reference = audio_file.path.parent / "ground" / f"{audio_file.stem}_normalized.txt"
   reference_text = reference.read_text(encoding="utf-8")
   errors, reference_words, wer = compute_plain_word_error_rate(reference_text, result.normalized_transcript)
@@ -481,14 +545,20 @@ def add_eval_scores(result: FileResult, *, audio_file: AudioInput) -> FileResult
 
 
 def normalize_transcript(transcript: str) -> str:
+  """Normalize transcript text before WER comparison."""
+
   return TRANSCRIPT_NORMALIZER(transcript)
 
 
 def count_words(transcript: str) -> int:
+  """Count whitespace-delimited words after exact or normalized transcription."""
+
   return len(transcript.split())
 
 
 def compute_plain_word_error_rate(reference_text: str, hypothesis_text: str) -> tuple[int, int, float]:
+  """Compute edit-distance WER over already-normalized whitespace tokens."""
+
   reference_words = reference_text.split()
   hypothesis_words = hypothesis_text.split()
   if not reference_words:
@@ -512,12 +582,23 @@ def compute_plain_word_error_rate(reference_text: str, hypothesis_text: str) -> 
 
 
 def compute_aggregate_wer(*, errors: int, reference_words: int) -> float:
+  """Compute corpus WER, treating hallucinations on empty references as 100%."""
+
   if reference_words:
     return errors / reference_words
   return 1.0 if errors else 0.0
 
 
+def compute_aggregate_rtfx(results: list[FileResult], *, wall_elapsed_seconds: float) -> float:
+  """Compute batch RTFx over files that actually attempted processing."""
+
+  processed_duration = sum(result.duration_seconds for result in results if result.elapsed_seconds is not None)
+  return processed_duration / wall_elapsed_seconds if wall_elapsed_seconds > 0 else 0.0
+
+
 def get_audio_duration_seconds(audio_path: Path) -> float:
+  """Read audio duration from mutagen metadata, returning zero if unavailable."""
+
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
   if isinstance(length, int | float):
@@ -526,6 +607,8 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
 
 
 def format_file_result(result: FileResult, *, mode: str) -> str:
+  """Render one terminal progress row for a completed file."""
+
   elapsed = "n/a" if result.elapsed_seconds is None else f"{result.elapsed_seconds:.2f}s"
   rtfx = "n/a" if result.rtfx is None else f"{result.rtfx:.2f}x"
   common = (
@@ -543,11 +626,12 @@ def format_file_result(result: FileResult, *, mode: str) -> str:
 
 
 def print_final_stats(results: list[FileResult], *, mode: str, wall_elapsed_seconds: float) -> None:
+  """Print aggregate terminal statistics for the batch run."""
+
   transcribed = sum(1 for result in results if result.status == "transcribed")
   skipped = sum(1 for result in results if result.status == "skipped")
   failed = sum(1 for result in results if result.status == "failed")
-  total_duration = sum(result.duration_seconds for result in results)
-  aggregate_rtfx = total_duration / wall_elapsed_seconds if wall_elapsed_seconds > 0 else 0.0
+  aggregate_rtfx = compute_aggregate_rtfx(results, wall_elapsed_seconds=wall_elapsed_seconds)
   line = (
     f"Total files={len(results)}, transcribed={transcribed}, skipped={skipped}, failed={failed}, "
     f"aggregate RTFx={aggregate_rtfx:.2f}x"
@@ -568,11 +652,12 @@ def write_report(
   results: list[FileResult],
   wall_elapsed_seconds: float,
 ) -> None:
+  """Write report.txt with run metadata, per-file rows, and aggregates."""
+
   transcribed = sum(1 for result in results if result.status == "transcribed")
   skipped = sum(1 for result in results if result.status == "skipped")
   failed = sum(1 for result in results if result.status == "failed")
-  total_duration = sum(result.duration_seconds for result in results)
-  aggregate_rtfx = total_duration / wall_elapsed_seconds if wall_elapsed_seconds > 0 else 0.0
+  aggregate_rtfx = compute_aggregate_rtfx(results, wall_elapsed_seconds=wall_elapsed_seconds)
   lines = [
     "asr-wer report",
     f"mode: {args.mode}",
@@ -605,6 +690,8 @@ def write_report(
 
 
 def render_report_header(*, eval_mode: bool) -> str:
+  """Render the tab-separated report header."""
+
   columns = [
     "file",
     "status",
@@ -621,6 +708,8 @@ def render_report_header(*, eval_mode: bool) -> str:
 
 
 def render_report_row(result: FileResult, *, eval_mode: bool) -> str:
+  """Render one tab-separated report row."""
+
   columns = [
     result.audio.path.name,
     result.status,

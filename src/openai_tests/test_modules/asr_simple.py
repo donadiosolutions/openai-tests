@@ -154,6 +154,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def add_connection_arguments(parser: argparse.ArgumentParser) -> None:
+  """Add shared OpenAI-compatible connection and runtime flags."""
+
   parser.add_argument(
     "--base-url",
     help="Base URL for the OpenAI-compatible API. Defaults to $OPENAI_BASE_URL or OpenAI's public API.",
@@ -192,6 +194,8 @@ def add_connection_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_audio_fixture_arguments(parser: argparse.ArgumentParser) -> None:
+  """Add asr-simple audio fixture generation and selection flags."""
+
   audio = parser.add_argument_group("Audio fixture")
   audio.add_argument("--audio-file", help="Use an existing audio file instead of synthesizing one with espeak-ng.")
   audio.add_argument(
@@ -221,6 +225,8 @@ def add_prompt_arguments(
   developer_default: str | None,
   user_default: str | None,
 ) -> None:
+  """Add reusable prompt fields with caller-provided defaults."""
+
   prompts = parser.add_argument_group("Prompt text")
   prompts.add_argument("--system-prompt", default=system_default)
   prompts.add_argument("--developer-prompt", default=developer_default)
@@ -228,6 +234,8 @@ def add_prompt_arguments(
 
 
 def add_completions_arguments(parser: argparse.ArgumentParser) -> None:
+  """Add chat completions endpoint parameter passthrough flags."""
+
   completions = parser.add_argument_group("Chat completions API parameters")
   completions.add_argument("--completions-audio-json")
   completions.add_argument("--completions-frequency-penalty", type=float)
@@ -277,6 +285,8 @@ def add_completions_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_transcriptions_arguments(parser: argparse.ArgumentParser) -> None:
+  """Add audio transcriptions endpoint parameter passthrough flags."""
+
   transcriptions = parser.add_argument_group("Transcriptions API parameters")
   transcriptions.add_argument("--transcriptions-chunking-strategy")
   transcriptions.add_argument("--transcriptions-chunking-strategy-json")
