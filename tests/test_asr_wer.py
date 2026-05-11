@@ -94,12 +94,20 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
   with pytest.raises(ValueError, match="prompt cannot be provided with transcriptions-prompt"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--prompt", "A", "--transcriptions-prompt", "B"))
 
+  with pytest.raises(ValueError, match="prompt cannot be provided with transcriptions-prompt"):
+    asr_wer.validate_args(build_args("ground", str(tmp_path), "--prompt", "", "--transcriptions-prompt", ""))
+
   with pytest.raises(ValueError, match="completions prompt flags cannot be used"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--system-prompt", "ignored"))
 
   with pytest.raises(ValueError, match="prompt cannot be provided with completions prompt overrides"):
     asr_wer.validate_args(
       build_args("ground", str(tmp_path), "--endpoint", "completions", "--prompt", "A", "--user-prompt", "B")
+    )
+
+  with pytest.raises(ValueError, match="prompt cannot be provided with completions prompt overrides"):
+    asr_wer.validate_args(
+      build_args("ground", str(tmp_path), "--endpoint", "completions", "--prompt", "", "--user-prompt", "")
     )
 
   with pytest.raises(ValueError, match="completions-messages-json cannot be used"):
@@ -126,6 +134,32 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
 
   with pytest.raises(ValueError, match="transcript-only"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--transcriptions-response-format", "srt"))
+
+
+def test_empty_completions_prompts_are_preserved(tmp_path: Path) -> None:
+  request_args = asr_wer.build_completions_request_args(
+    build_args(
+      "ground",
+      str(tmp_path),
+      "--endpoint",
+      "completions",
+      "--prompt",
+      "",
+      "--system-prompt",
+      "",
+      "--user-prompt",
+      "",
+    )
+  )
+
+  assert request_args.system_prompt == ""
+  assert request_args.developer_prompt == ""
+  assert request_args.user_prompt == ""
+
+  explicit_developer_args = asr_wer.build_completions_request_args(
+    build_args("ground", str(tmp_path), "--endpoint", "completions", "--developer-prompt", "")
+  )
+  assert explicit_developer_args.developer_prompt == ""
 
 
 def test_run_returns_configuration_error_for_invalid_endpoint_json(
@@ -418,15 +452,10 @@ def test_eval_reports_ground_os_errors(tmp_path: Path, monkeypatch: pytest.Monke
   ground_path.write_text("alpha", encoding="utf-8")
   original_read_text = Path.read_text
 
-  def fake_read_text(
-    path: Path,
-    encoding: str | None = None,
-    errors: str | None = None,
-    newline: str | None = None,
-  ) -> str:
+  def fake_read_text(path: Path, *args: str | None, **kwargs: str | None) -> str:
     if path == ground_path:
       raise OSError("permission denied")
-    return original_read_text(path, encoding=encoding, errors=errors, newline=newline)
+    return original_read_text(path, *args, **kwargs)
 
   monkeypatch.setattr(Path, "read_text", fake_read_text)
   with pytest.raises(ValueError, match="permission denied"):

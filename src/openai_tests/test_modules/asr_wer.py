@@ -124,7 +124,7 @@ def validate_args(args: argparse.Namespace) -> None:
 
   if args.batch < 1:
     raise ValueError("batch must be at least 1")
-  if args.prompt and args.endpoint == "transcriptions" and args.transcriptions_prompt:
+  if args.prompt is not None and args.endpoint == "transcriptions" and args.transcriptions_prompt is not None:
     raise ValueError("prompt cannot be provided with transcriptions-prompt")
   if args.endpoint == "transcriptions" and has_explicit_completions_prompt_override(args):
     raise ValueError("completions prompt flags cannot be used with transcriptions; use prompt or transcriptions-prompt")
@@ -132,7 +132,7 @@ def validate_args(args: argparse.Namespace) -> None:
     raise ValueError(
       "transcriptions-response-format must be transcript-only for asr-wer; srt and vtt include timestamps"
     )
-  if args.prompt and args.endpoint == "completions" and has_explicit_completions_prompt_override(args):
+  if args.prompt is not None and args.endpoint == "completions" and has_explicit_completions_prompt_override(args):
     raise ValueError("prompt cannot be provided with completions prompt overrides")
   if args.endpoint == "completions" and args.completions_messages_json is not None:
     raise ValueError("completions-messages-json cannot be used with batch audio")
@@ -558,11 +558,14 @@ def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespa
   """Derive per-file completions arguments from batch-level arguments."""
 
   request_args = argparse.Namespace(**vars(args))
-  request_args.system_prompt = request_args.system_prompt or asr_simple.DEFAULT_SYSTEM_PROMPT
-  request_args.developer_prompt = (
-    request_args.prompt or request_args.developer_prompt or asr_simple.DEFAULT_DEVELOPER_PROMPT
-  )
-  request_args.user_prompt = request_args.user_prompt or asr_simple.DEFAULT_USER_PROMPT
+  if request_args.system_prompt is None:
+    request_args.system_prompt = asr_simple.DEFAULT_SYSTEM_PROMPT
+  if request_args.prompt is not None:
+    request_args.developer_prompt = request_args.prompt
+  elif request_args.developer_prompt is None:
+    request_args.developer_prompt = asr_simple.DEFAULT_DEVELOPER_PROMPT
+  if request_args.user_prompt is None:
+    request_args.user_prompt = asr_simple.DEFAULT_USER_PROMPT
   if request_args.service_tier is not None:
     request_args.completions_service_tier = request_args.service_tier
   return request_args
