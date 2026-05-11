@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -311,10 +311,15 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
 
   source_durations: dict[str, float] = {}
   source_chunk_counts: dict[str, int] = {}
+  seen_source_files: set[str] = set()
   for source_raw in sources_raw:
     if not isinstance(source_raw, dict) or not isinstance(source_raw.get("source_file"), str):
       raise ValueError("Prepared manifest source rows must include source_file")
     source_file = require_manifest_filename(source_raw, "source_file")
+    source_key = source_file.casefold()
+    if source_key in seen_source_files:
+      raise ValueError(f"Prepared manifest duplicate source_file {source_file}")
+    seen_source_files.add(source_key)
     source_duration = require_manifest_number(source_raw, "duration_seconds")
     if source_duration <= 0:
       raise ValueError(f"Prepared manifest source duration_seconds for {source_file} must be greater than 0")
@@ -332,19 +337,23 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     if source_stem != Path(source_file).stem:
       raise ValueError(f"Prepared manifest source_stem {source_stem!r} does not match source_file {source_file!r}")
     chunk_file = require_manifest_filename(chunk_raw, "chunk_file")
-    if chunk_file in seen_chunk_files:
+    chunk_key = chunk_file.casefold()
+    if chunk_key in seen_chunk_files:
       raise ValueError(f"Prepared manifest duplicate chunk_file {chunk_file}")
-    seen_chunk_files.add(chunk_file)
+    seen_chunk_files.add(chunk_key)
     chunk_path = audio_dir / "prep" / chunk_file
     if not chunk_path.is_file():
       raise ValueError(f"Prepared chunk file does not exist: {chunk_path}")
     source_path = audio_dir / source_file
+    chunk_format = chunk_path.suffix.lower().lstrip(".")
+    if chunk_format not in asr_simple.TRANSCRIPTION_CONTENT_TYPES:
+      raise ValueError(f"Prepared manifest unsupported prepared chunk extension for {chunk_file}")
     source_audio = AudioInput(
       path=source_path,
       stem=source_stem,
       format=source_path.suffix.lower().lstrip("."),
     )
-    chunk_audio = AudioInput(path=chunk_path, stem=chunk_path.stem, format=chunk_path.suffix.lower().lstrip("."))
+    chunk_audio = AudioInput(path=chunk_path, stem=chunk_path.stem, format=chunk_format)
     chunk_index = require_manifest_integer(chunk_raw, "chunk_index")
     source_indices = seen_chunk_indices.setdefault(source_file, set())
     if chunk_index in source_indices:
@@ -389,6 +398,12 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
         f"Prepared manifest chunk_index values for {source_file} must be contiguous from "
         f"0 to {expected_chunk_count - 1}"
       )
+    validate_prepared_chunk_ranges(
+      source_file=source_file,
+      source_duration=source_durations[source_file],
+      overlap=overlap,
+      chunks=grouped[source_file],
+    )
 
   prepared_sources = [
     PreparedSource(
@@ -404,6 +419,27 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     raise ValueError("Prepared manifest does not contain any chunks")
   validate_output_artifact_names([source.audio for source in prepared_sources])
   return prepared_sources
+
+
+def validate_prepared_chunk_ranges(
+  *,
+  source_file: str,
+  source_duration: float,
+  overlap: float,
+  chunks: list[PreparedChunk],
+) -> None:
+  """Validate that manifest chunk timing rebuilds the declared source duration."""
+
+  sorted_chunks = sorted(chunks, key=lambda chunk: chunk.index)
+  if not math.isclose(sorted_chunks[0].start_seconds, 0.0, rel_tol=0.0, abs_tol=0.001):
+    raise ValueError(f"Prepared manifest chunk ranges for {source_file} must start at 0")
+  if not math.isclose(sorted_chunks[-1].end_seconds, source_duration, rel_tol=0.0, abs_tol=0.001):
+    raise ValueError(f"Prepared manifest chunk ranges for {source_file} must end at source duration")
+  expected_next_start = sorted_chunks[0].end_seconds - overlap
+  for chunk in sorted_chunks[1:]:
+    if not math.isclose(chunk.start_seconds, expected_next_start, rel_tol=0.0, abs_tol=0.001):
+      raise ValueError(f"Prepared manifest chunk range gap for {source_file}")
+    expected_next_start = chunk.end_seconds - overlap
 
 
 def require_manifest_string(row: dict[str, Any], key: str) -> str:
@@ -615,6 +651,7 @@ def process_prepared_sources(
   with tqdm(total=total_chunks, unit="chunk") as progress:
     with ThreadPoolExecutor(max_workers=args.batch) as executor:
       futures: dict[Future[str], PreparedChunk] = {}
+      chunks_to_submit: list[PreparedChunk] = []
       for source in prepared_sources:
         skipped_result = maybe_skip_prepared_ground_file(args, source, output_dir)
         if skipped_result is not None:
@@ -622,32 +659,47 @@ def process_prepared_sources(
           progress.update(len(source.chunks))
           tqdm.write(format_file_result(skipped_result, mode=args.mode))
           continue
-        for chunk in source.chunks:
-          futures[
-            executor.submit(
-              transcribe_prepared_chunk,
-              args=args,
-              chunk=chunk,
-              base_url=base_url,
-              api_key=api_key,
-              started_by_source=started_by_source,
-              timing_lock=timing_lock,
-            )
-          ] = chunk
+        chunks_to_submit.extend(source.chunks)
 
-      for future in as_completed(futures):
-        chunk = futures[future]
-        try:
-          transcript = future.result()
-          chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
-          chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
-          atomic_write_text(chunk_output, transcript)
-        except Exception as exc:
-          chunk_errors[chunk.source.path.name].append(str(exc))
-        remaining_by_source[chunk.source.path.name] -= 1
-        if remaining_by_source[chunk.source.path.name] == 0:
-          finished_by_source[chunk.source.path.name] = time.perf_counter()
-        progress.update(1)
+      next_chunk_index = 0
+
+      def submit_next_chunk() -> None:
+        nonlocal next_chunk_index
+        if next_chunk_index >= len(chunks_to_submit):
+          return
+        chunk = chunks_to_submit[next_chunk_index]
+        next_chunk_index += 1
+        futures[
+          executor.submit(
+            transcribe_prepared_chunk,
+            args=args,
+            chunk=chunk,
+            base_url=base_url,
+            api_key=api_key,
+            started_by_source=started_by_source,
+            timing_lock=timing_lock,
+          )
+        ] = chunk
+
+      for _ in range(min(args.batch, len(chunks_to_submit))):
+        submit_next_chunk()
+
+      while futures:
+        done, _ = wait(futures, return_when=FIRST_COMPLETED)
+        for future in done:
+          chunk = futures.pop(future)
+          try:
+            transcript = future.result()
+            chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
+            chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
+            atomic_write_text(chunk_output, transcript)
+          except Exception as exc:
+            chunk_errors[chunk.source.path.name].append(str(exc))
+          remaining_by_source[chunk.source.path.name] -= 1
+          if remaining_by_source[chunk.source.path.name] == 0:
+            finished_by_source[chunk.source.path.name] = time.perf_counter()
+          progress.update(1)
+          submit_next_chunk()
 
   for source in prepared_sources:
     if source.audio.path.name in results_by_source:

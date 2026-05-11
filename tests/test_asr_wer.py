@@ -1061,6 +1061,15 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
       }
     ],
   }
+  duplicate_source = dict(unsafe_base)
+  duplicate_source["sources"] = [
+    {"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1},
+    {"source_file": "call.wav", "duration_seconds": 2.0, "chunk_count": 1},
+  ]
+  manifest_path.write_text(json.dumps(duplicate_source), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"duplicate source_file call\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   unsafe_source = dict(unsafe_base)
   unsafe_source["sources"] = [{"source_file": "../call.wav", "duration_seconds": 1.0}]
   manifest_path.write_text(json.dumps(unsafe_source), encoding="utf-8")
@@ -1117,6 +1126,17 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match="duplicate chunk_file"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  case_duplicate_chunk_file = dict(unsafe_base)
+  case_duplicate_chunk_file["sources"] = [{"source_file": "call.wav", "duration_seconds": 2.0, "chunk_count": 2}]
+  case_duplicate_chunk_file["chunks"] = [
+    unsafe_base["chunks"][0],
+    {**unsafe_base["chunks"][0], "chunk_file": "CALL_0000_000000_001000.wav", "chunk_index": 1},
+  ]
+  write_audio(prep_dir / "CALL_0000_000000_001000.wav")
+  manifest_path.write_text(json.dumps(case_duplicate_chunk_file), encoding="utf-8")
+  with pytest.raises(ValueError, match="duplicate chunk_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   non_contiguous_index = dict(unsafe_base)
   non_contiguous_index["sources"] = [{"source_file": "call.wav", "duration_seconds": 2.0, "chunk_count": 2}]
   non_contiguous_index["chunks"] = [
@@ -1145,6 +1165,41 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   with pytest.raises(
     ValueError, match=r"chunk duration_seconds for call_0000_000000_001000\.wav must be greater than 0"
   ):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  unsupported_chunk_file = dict(unsafe_base)
+  unsupported_chunk_file["chunks"] = [{**unsafe_base["chunks"][0], "chunk_file": "manifest.json"}]
+  manifest_path.write_text(json.dumps(unsupported_chunk_file), encoding="utf-8")
+  with pytest.raises(ValueError, match="unsupported prepared chunk extension"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  truncated_ranges = dict(unsafe_base)
+  truncated_ranges["sources"] = [{"source_file": "call.wav", "duration_seconds": 50.0, "chunk_count": 1}]
+  manifest_path.write_text(json.dumps(truncated_ranges), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk ranges for call\.wav must end at source duration"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  shifted_start_range = dict(unsafe_base)
+  shifted_start_range["chunks"] = [{**unsafe_base["chunks"][0], "start_seconds": 0.5, "end_seconds": 1.0}]
+  manifest_path.write_text(json.dumps(shifted_start_range), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk ranges for call\.wav must start at 0"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  gap_ranges = dict(unsafe_base)
+  gap_ranges["sources"] = [{"source_file": "call.wav", "duration_seconds": 50.0, "chunk_count": 2}]
+  gap_ranges["chunks"] = [
+    unsafe_base["chunks"][0],
+    {
+      **unsafe_base["chunks"][0],
+      "chunk_file": "call_0001_001000_002000.wav",
+      "chunk_index": 1,
+      "start_seconds": 30.0,
+      "end_seconds": 50.0,
+      "duration_seconds": 20.0,
+    },
+  ]
+  manifest_path.write_text(json.dumps(gap_ranges), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk range gap for call\.wav"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
   missing_chunk_source = dict(unsafe_base)
@@ -1567,7 +1622,7 @@ def test_process_prepared_sources_uses_per_source_finish_times(
     api_key=None,
   )
 
-  assert [result.elapsed_seconds for result in results] == [90.0, 81.0]
+  assert [result.elapsed_seconds for result in results] == [10.0, 1.0]
 
 
 def test_transcribe_prepared_chunk_starts_timer_inside_worker(
