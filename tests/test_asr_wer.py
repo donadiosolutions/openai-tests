@@ -1135,6 +1135,20 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
   manifest_path.write_text(
+    json.dumps({"overlap_seconds": 0.0, "segment_duration_seconds": 0.0, "sources": [], "chunks": []}),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="segment_duration_seconds must be greater than 0"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps({"overlap_seconds": 30.0, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="overlap_seconds must be at least 0"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
     json.dumps({"overlap_seconds": 3.0, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
     encoding="utf-8",
   )
@@ -1145,8 +1159,12 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
     asr_wer.require_manifest_string({}, "source_file")
   with pytest.raises(ValueError, match="plain filename source_file"):
     asr_wer.require_manifest_filename({"source_file": "nested/call.wav"}, "source_file")
+  with pytest.raises(ValueError, match="plain filename source_file"):
+    asr_wer.require_manifest_filename({"source_file": "C:call.wav"}, "source_file")
   with pytest.raises(ValueError, match="plain filename stem source_stem"):
     asr_wer.require_manifest_stem({"source_stem": "/tmp/call"}, "source_stem")
+  with pytest.raises(ValueError, match="plain filename stem source_stem"):
+    asr_wer.require_manifest_stem({"source_stem": "C:call"}, "source_stem")
   with pytest.raises(ValueError, match="numeric duration_seconds"):
     asr_wer.require_manifest_number({"duration_seconds": "1"}, "duration_seconds")
   with pytest.raises(ValueError, match="finite numeric duration_seconds"):
