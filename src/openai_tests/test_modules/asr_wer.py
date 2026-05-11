@@ -513,6 +513,8 @@ def expected_prepared_chunk_filename(
 
 
 def require_manifest_string(row: dict[str, Any], key: str) -> str:
+  """Extract a non-empty string value from a prepared manifest row."""
+
   value = row.get(key)
   if not isinstance(value, str) or not value:
     raise ValueError(f"Prepared manifest row requires string {key}")
@@ -520,6 +522,8 @@ def require_manifest_string(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_filename(row: dict[str, Any], key: str) -> str:
+  """Extract a plain filename value from a prepared manifest row."""
+
   value = require_manifest_string(row, key)
   if (
     Path(value).is_absolute()
@@ -538,6 +542,8 @@ def require_manifest_filename(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_stem(row: dict[str, Any], key: str) -> str:
+  """Extract a plain filename stem from a prepared manifest row."""
+
   value = require_manifest_string(row, key)
   if (
     Path(value).is_absolute()
@@ -556,6 +562,8 @@ def require_manifest_stem(row: dict[str, Any], key: str) -> str:
 
 
 def require_manifest_number(row: dict[str, Any], key: str) -> float:
+  """Extract a finite numeric value from a prepared manifest row."""
+
   value = row.get(key)
   if not isinstance(value, (int, float)) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires numeric {key}")
@@ -565,6 +573,8 @@ def require_manifest_number(row: dict[str, Any], key: str) -> float:
 
 
 def require_manifest_integer(row: dict[str, Any], key: str) -> int:
+  """Extract an integer value from a prepared manifest row."""
+
   value = row.get(key)
   if not isinstance(value, int) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires integer {key}")
@@ -871,6 +881,8 @@ def build_prepared_source_result(
   chunk_errors: list[str],
   elapsed_seconds: float,
 ) -> FileResult:
+  """Build a stitched prepared-source result or failed row for chunk errors."""
+
   exact_path = output_dir / f"{source.audio.stem}.txt"
   normalized_path = output_dir / f"{source.audio.stem}_normalized.txt"
   if chunk_errors or len(chunk_transcripts) != len(source.chunks):
@@ -946,6 +958,8 @@ def build_prepared_source_result(
 
 
 def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
+  """Stitch normalized chunks and remove exact repeated boundary tokens."""
+
   stitched: list[str] = []
   max_overlap_tokens = (
     0 if overlap_seconds == 0 else math.ceil(OVERLAP_TOKEN_RATE_PER_SECOND * overlap_seconds) + OVERLAP_TOKEN_BUFFER
@@ -1466,12 +1480,16 @@ def resolve_report_temperature(args: argparse.Namespace) -> str:
 
 
 def resolve_report_prep_overlap(args: argparse.Namespace, _results: list[FileResult]) -> str:
+  """Return prep overlap report metadata, or 'none' for non-prep runs."""
+
   if not getattr(args, "prep", False):
     return "none"
   return str(getattr(args, "_prep_overlap_seconds", args.overlap if args.overlap is not None else "unknown"))
 
 
 def resolve_report_prep_segment_duration(args: argparse.Namespace, _results: list[FileResult]) -> str:
+  """Return prep segment-duration report metadata, or 'none' for non-prep runs."""
+
   if not getattr(args, "prep", False):
     return "none"
   return str(getattr(args, "_prep_segment_duration_seconds", 30.0))
