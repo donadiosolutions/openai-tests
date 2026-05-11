@@ -8,6 +8,7 @@ import math
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -193,13 +194,10 @@ def prepare_output_dir(audio_dir: Path) -> Path:
 def prepare_temp_output_dir(audio_dir: Path) -> Path:
   """Create an empty staging directory for prep output."""
 
-  prep_tmp_dir = audio_dir / ".prep.tmp"
-  cleanup_temp_output_dir(prep_tmp_dir)
   try:
-    prep_tmp_dir.mkdir(parents=True)
+    return Path(tempfile.mkdtemp(prefix=".prep.", suffix=".tmp", dir=audio_dir))
   except OSError as exc:
-    raise ValueError(f"Unable to create temporary prep output directory {prep_tmp_dir}: {exc}") from exc
-  return prep_tmp_dir
+    raise ValueError(f"Unable to create temporary prep output directory in {audio_dir}: {exc}") from exc
 
 
 def cleanup_temp_output_dir(prep_tmp_dir: Path) -> None:

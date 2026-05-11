@@ -114,7 +114,37 @@ def test_failed_segmentation_cleans_staged_prep_output(
   assert asr_prep.run(build_args(str(audio_dir))) == 2
   assert "ffmpeg failed" in capsys.readouterr().err
   assert not (audio_dir / "prep").exists()
-  assert not (audio_dir / ".prep.tmp").exists()
+  assert not any(path.name.startswith(".prep.") and path.name.endswith(".tmp") for path in audio_dir.iterdir())
+
+
+def test_staged_prep_output_does_not_delete_existing_temp_like_directory(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio-existing-temp"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  existing_temp = audio_dir / ".prep.existing.tmp"
+  existing_temp.mkdir()
+  (existing_temp / "keep.txt").write_text("keep", encoding="utf-8")
+  commands: list[list[str]] = []
+
+  monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 1.0)
+
+  def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    """Record ffmpeg output paths while preserving existing temp-like folders."""
+
+    commands.append(command)
+    Path(command[-1]).write_bytes(b"RIFF")
+    return subprocess.CompletedProcess(command, 0, "", "")
+
+  monkeypatch.setattr(asr_prep.subprocess, "run", fake_run)
+
+  assert asr_prep.run(build_args(str(audio_dir))) == 0
+  assert "Wrote 1 chunks" in capsys.readouterr().out
+  assert (existing_temp / "keep.txt").read_text(encoding="utf-8") == "keep"
+  assert Path(commands[0][-1]).parent != existing_temp
 
 
 def test_staged_prep_helpers_report_cleanup_and_finalize_failures(
@@ -123,7 +153,7 @@ def test_staged_prep_helpers_report_cleanup_and_finalize_failures(
 ) -> None:
   """Temporary prep helpers report cleanup and finalization filesystem failures."""
 
-  prep_tmp_dir = tmp_path / ".prep.tmp"
+  prep_tmp_dir = tmp_path / ".prep.test.tmp"
   prep_tmp_dir.mkdir()
 
   def fail_rmtree(path: Path) -> None:
@@ -136,6 +166,7 @@ def test_staged_prep_helpers_report_cleanup_and_finalize_failures(
     asr_prep.cleanup_temp_output_dir(prep_tmp_dir)
 
   monkeypatch.undo()
+  asr_prep.cleanup_temp_output_dir(tmp_path / ".prep.missing.tmp")
   prep_dir = tmp_path / "prep"
   prep_dir.mkdir()
   asr_prep.finalize_output_dir(prep_tmp_dir, prep_dir)
@@ -180,22 +211,10 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   assert "Prep output path is not a directory" in capsys.readouterr().err
   (audio_dir / "prep").unlink()
 
-  original_mkdir = Path.mkdir
-
-  def fail_mkdir(
-    path: Path,
-    mode: int = 0o777,
-    parents: bool = False,
-    exist_ok: bool = False,
-  ) -> None:
-    if path == audio_dir / ".prep.tmp":
-      raise PermissionError("denied")
-    original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
-
-  monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+  monkeypatch.setattr(asr_prep.tempfile, "mkdtemp", lambda **kwargs: (_ for _ in ()).throw(PermissionError("denied")))
   assert asr_prep.run(build_args(str(audio_dir))) == 2
   assert "Unable to create temporary prep output directory" in capsys.readouterr().err
-  monkeypatch.setattr(Path, "mkdir", original_mkdir)
+  monkeypatch.undo()
 
   (audio_dir / "prep").mkdir()
 
@@ -354,7 +373,7 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
       "-vn",
       "-acodec",
       "pcm_s16le",
-      str(audio_dir / ".prep.tmp" / "call_0000_000000_030000.wav"),
+      commands[0][-1],
     ],
     [
       "ffmpeg",
@@ -370,9 +389,12 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
       "-vn",
       "-acodec",
       "pcm_s16le",
-      str(audio_dir / ".prep.tmp" / "call_0001_028750_031000.wav"),
+      commands[1][-1],
     ],
   ]
+  assert Path(commands[0][-1]).parent.name.startswith(".prep.")
+  assert Path(commands[0][-1]).parent.name.endswith(".tmp")
+  assert Path(commands[1][-1]).parent == Path(commands[0][-1]).parent
   manifest = json.loads((audio_dir / "prep" / "manifest.json").read_text(encoding="utf-8"))
   assert manifest["segment_duration_seconds"] == 30.0
   assert manifest["overlap_seconds"] == 1.25

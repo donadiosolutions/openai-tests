@@ -329,6 +329,7 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
   grouped: dict[str, list[PreparedChunk]] = {}
   seen_chunk_indices: dict[str, set[int]] = {}
   seen_chunk_files: set[str] = set()
+  seen_chunk_stems: set[str] = set()
   for chunk_raw in chunks_raw:
     if not isinstance(chunk_raw, dict):
       raise ValueError("Prepared manifest chunk rows must be objects")
@@ -348,6 +349,10 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     chunk_format = chunk_path.suffix.lower().lstrip(".")
     if chunk_format not in asr_simple.TRANSCRIPTION_CONTENT_TYPES:
       raise ValueError(f"Prepared manifest unsupported prepared chunk extension for {chunk_file}")
+    chunk_stem_key = chunk_path.stem.casefold()
+    if chunk_stem_key in seen_chunk_stems:
+      raise ValueError(f"Prepared manifest duplicate chunk stem {chunk_path.stem}")
+    seen_chunk_stems.add(chunk_stem_key)
     source_audio = AudioInput(
       path=source_path,
       stem=source_stem,
@@ -355,6 +360,14 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     )
     chunk_audio = AudioInput(path=chunk_path, stem=chunk_path.stem, format=chunk_format)
     chunk_index = require_manifest_integer(chunk_raw, "chunk_index")
+    expected_chunk_file = expected_prepared_chunk_filename(
+      source_stem=source_stem,
+      chunk_index=chunk_index,
+      start_seconds=require_manifest_number(chunk_raw, "start_seconds"),
+      end_seconds=require_manifest_number(chunk_raw, "end_seconds"),
+    )
+    if chunk_file != expected_chunk_file:
+      raise ValueError(f"Prepared manifest chunk_file {chunk_file!r} does not match expected {expected_chunk_file!r}")
     source_indices = seen_chunk_indices.setdefault(source_file, set())
     if chunk_index in source_indices:
       raise ValueError(f"Prepared manifest duplicate chunk_index {chunk_index} for {source_file}")
@@ -440,6 +453,8 @@ def validate_prepared_chunk_ranges(
       raise ValueError(f"Prepared manifest chunk duration mismatch for {source_file}")
     if chunk.duration_seconds > segment_duration + tolerance:
       raise ValueError(f"Prepared manifest chunk duration exceeds segment_duration_seconds for {source_file}")
+    if index < len(sorted_chunks) - 1 and chunk.end_seconds >= source_duration - tolerance:
+      raise ValueError(f"Prepared manifest non-final chunks for {source_file} must end before source duration")
     if index < len(sorted_chunks) - 1 and not math.isclose(
       chunk.duration_seconds,
       segment_duration,
@@ -456,6 +471,20 @@ def validate_prepared_chunk_ranges(
     if not math.isclose(chunk.start_seconds, expected_next_start, rel_tol=0.0, abs_tol=tolerance):
       raise ValueError(f"Prepared manifest chunk range gap for {source_file}")
     expected_next_start = chunk.end_seconds - overlap
+
+
+def expected_prepared_chunk_filename(
+  *,
+  source_stem: str,
+  chunk_index: int,
+  start_seconds: float,
+  end_seconds: float,
+) -> str:
+  """Return the deterministic prep chunk filename for a manifest row."""
+
+  start_ms = round(start_seconds * 1000)
+  end_ms = round(end_seconds * 1000)
+  return f"{source_stem}_{chunk_index:04d}_{start_ms:06d}_{end_ms:06d}.wav"
 
 
 def require_manifest_string(row: dict[str, Any], key: str) -> str:
