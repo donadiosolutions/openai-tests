@@ -8,6 +8,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import mutagen
 from tqdm import tqdm
@@ -125,6 +126,8 @@ def validate_args(args: argparse.Namespace) -> None:
     raise ValueError("batch must be at least 1")
   if args.prompt and args.endpoint == "transcriptions" and args.transcriptions_prompt:
     raise ValueError("prompt cannot be provided with transcriptions-prompt")
+  if args.endpoint == "transcriptions" and has_explicit_completions_prompt_override(args):
+    raise ValueError("completions prompt flags cannot be used with transcriptions; use prompt or transcriptions-prompt")
   if args.endpoint == "transcriptions" and args.transcriptions_response_format in {"srt", "vtt"}:
     raise ValueError(
       "transcriptions-response-format must be transcript-only for asr-wer; srt and vtt include timestamps"
@@ -139,12 +142,29 @@ def validate_args(args: argparse.Namespace) -> None:
 def validate_endpoint_request_config(args: argparse.Namespace) -> None:
   """Parse selected endpoint options once before any network requests are sent."""
 
-  if args.endpoint == "completions":
-    request_args = build_completions_request_args(args)
-    asr_simple.build_completions_request_config(request_args, b"", "wav")
+  try:
+    if args.endpoint == "completions":
+      request_args = build_completions_request_args(args)
+      config = asr_simple.build_completions_request_config(request_args, b"", "wav")
+      validate_completions_response_format_for_wer(config.get("response_format"))
+      return
+    request_args = build_transcriptions_request_args(args)
+    asr_simple.build_transcriptions_request_config(request_args)
+  except OSError as exc:
+    raise ValueError(f"Unable to read JSON option: {exc}") from exc
+
+
+def validate_completions_response_format_for_wer(response_format: object) -> None:
+  """Reject structured chat response formats that wrap the transcript in JSON."""
+
+  if response_format is None:
     return
-  request_args = build_transcriptions_request_args(args)
-  asr_simple.build_transcriptions_request_config(request_args)
+  if not isinstance(response_format, dict):
+    raise ValueError("completions-response-format-json must request plain text for asr-wer")
+  typed_response_format = cast("dict[str, Any]", response_format)
+  response_type = typed_response_format.get("type")
+  if response_type is not None and response_type != "text":
+    raise ValueError("completions-response-format-json must request plain text for asr-wer")
 
 
 def has_explicit_completions_prompt_override(args: argparse.Namespace) -> bool:
@@ -178,7 +198,27 @@ def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
         f"Duplicate audio file stem {audio_file.stem!r}: {stems[audio_file.stem].name} and {audio_file.path.name}"
       )
     stems[audio_file.stem] = audio_file.path
+  validate_output_artifact_names(audio_files)
   return audio_files
+
+
+def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
+  """Reject audio stems that would overwrite generated transcripts or report.txt."""
+
+  artifact_owner: dict[str, str] = {}
+  for audio_file in audio_files:
+    for artifact_name, kind in (
+      (f"{audio_file.stem}.txt", "exact transcript"),
+      (f"{audio_file.stem}_normalized.txt", "normalized transcript"),
+    ):
+      if artifact_name == "report.txt":
+        raise ValueError(f"Audio stem {audio_file.stem!r} uses reserved output artifact {artifact_name!r}")
+      previous = artifact_owner.get(artifact_name)
+      if previous is not None:
+        raise ValueError(
+          f"Output artifact collision for {artifact_name!r}: {previous} and {audio_file.path.name} {kind}"
+        )
+      artifact_owner[artifact_name] = f"{audio_file.path.name} {kind}"
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
@@ -217,21 +257,28 @@ def validate_eval_ground(audio_dir: Path, audio_files: list[AudioInput]) -> None
   ground_dir = audio_dir / "ground"
   missing = []
   unreadable = []
+  empty = []
   for audio_file in audio_files:
     ground_path = ground_dir / f"{audio_file.stem}_normalized.txt"
     if not ground_path.is_file():
       missing.append(audio_file.stem)
       continue
     try:
-      ground_path.read_text(encoding="utf-8")
+      ground_text = ground_path.read_text(encoding="utf-8")
     except OSError as exc:
       unreadable.append(f"{audio_file.stem}: {exc}")
+      continue
     except UnicodeDecodeError as exc:
       unreadable.append(f"{audio_file.stem}: {exc}")
+      continue
+    if not ground_text.strip():
+      empty.append(audio_file.stem)
   if missing:
     raise ValueError(f"Missing normalized ground transcript for: {', '.join(missing)}")
   if unreadable:
     raise ValueError(f"Unreadable normalized ground transcript: {'; '.join(unreadable)}")
+  if empty:
+    raise ValueError(f"Empty normalized ground transcript for: {', '.join(empty)}")
 
 
 def resolve_endpoint_model(args: argparse.Namespace) -> str:

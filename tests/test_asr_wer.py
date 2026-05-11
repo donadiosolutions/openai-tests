@@ -78,8 +78,24 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
   with pytest.raises(ValueError, match="Duplicate audio file stem"):
     asr_wer.discover_audio_files(duplicate_dir)
 
+  collision_dir = tmp_path / "collisions"
+  collision_dir.mkdir()
+  write_audio(collision_dir / "clip.wav")
+  write_audio(collision_dir / "clip_normalized.wav")
+  with pytest.raises(ValueError, match="Output artifact collision"):
+    asr_wer.discover_audio_files(collision_dir)
+
+  reserved_dir = tmp_path / "reserved"
+  reserved_dir.mkdir()
+  write_audio(reserved_dir / "report.wav")
+  with pytest.raises(ValueError, match="reserved output artifact"):
+    asr_wer.discover_audio_files(reserved_dir)
+
   with pytest.raises(ValueError, match="prompt cannot be provided with transcriptions-prompt"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--prompt", "A", "--transcriptions-prompt", "B"))
+
+  with pytest.raises(ValueError, match="completions prompt flags cannot be used"):
+    asr_wer.validate_args(build_args("ground", str(tmp_path), "--system-prompt", "ignored"))
 
   with pytest.raises(ValueError, match="prompt cannot be provided with completions prompt overrides"):
     asr_wer.validate_args(
@@ -90,6 +106,23 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
     asr_wer.validate_args(
       build_args("ground", str(tmp_path), "--endpoint", "completions", "--completions-messages-json", "[]")
     )
+
+  with pytest.raises(ValueError, match="plain text"):
+    asr_wer.validate_args(
+      build_args(
+        "ground",
+        str(tmp_path),
+        "--endpoint",
+        "completions",
+        "--completions-response-format-json",
+        '{"type":"json_object"}',
+      )
+    )
+
+  with pytest.raises(ValueError, match="plain text"):
+    asr_wer.validate_completions_response_format_for_wer("json")
+  asr_wer.validate_completions_response_format_for_wer({})
+  asr_wer.validate_completions_response_format_for_wer({"type": "text"})
 
   with pytest.raises(ValueError, match="transcript-only"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--transcriptions-response-format", "srt"))
@@ -111,6 +144,31 @@ def test_run_returns_configuration_error_for_invalid_endpoint_json(
   )
   captured = capsys.readouterr()
   assert "Configuration error: Invalid JSON" in captured.err
+
+
+def test_run_returns_configuration_error_for_unreadable_json_option_file(
+  capsys: pytest.CaptureFixture[str],
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+
+  assert (
+    asr_wer.run(
+      build_args(
+        "ground",
+        str(audio_dir),
+        "--endpoint",
+        "completions",
+        "--completions-response-format-json",
+        f"@{tmp_path / 'missing.json'}",
+      )
+    )
+    == 2
+  )
+  captured = capsys.readouterr()
+  assert "Configuration error: Unable to read JSON option" in captured.err
 
 
 def test_resolve_endpoint_model_uses_transcriptions_default_without_shared_model() -> None:
@@ -372,6 +430,18 @@ def test_eval_reports_ground_os_errors(tmp_path: Path, monkeypatch: pytest.Monke
 
   monkeypatch.setattr(Path, "read_text", fake_read_text)
   with pytest.raises(ValueError, match="permission denied"):
+    asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
+
+
+def test_eval_rejects_empty_ground_normalized_transcripts(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio_path = write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "clip_normalized.txt").write_text(" \n\t", encoding="utf-8")
+
+  with pytest.raises(ValueError, match="Empty normalized ground transcript"):
     asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
 
 
