@@ -141,7 +141,10 @@ def normalize_number_words(words: list[str]) -> list[str]:
       normalized.append(str(NUMBER_WORDS[word] + NUMBER_WORDS[next_word]))
       index += 2
       continue
-    if word in NUMBER_WORDS and word not in {"one"}:
+    previous_word = words[index - 1] if index > 0 else None
+    if word == "one" and (previous_word in NUMBER_WORDS or next_word in NUMBER_WORDS):
+      normalized.append("1")
+    elif word in NUMBER_WORDS and word not in {"one"}:
       normalized.append(str(NUMBER_WORDS[word]))
     else:
       normalized.append(word)

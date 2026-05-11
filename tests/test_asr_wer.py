@@ -135,6 +135,27 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
   with pytest.raises(ValueError, match="transcript-only"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--transcriptions-response-format", "srt"))
 
+  with pytest.raises(ValueError, match="transcript-only"):
+    asr_wer.validate_args(build_args("ground", str(tmp_path), "--transcriptions-response-format", "diarized_json"))
+
+
+def test_discover_audio_files_reports_unreadable_directories(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  original_iterdir = Path.iterdir
+
+  def fake_iterdir(path: Path):
+    if path == audio_dir:
+      raise PermissionError("denied")
+    return original_iterdir(path)
+
+  monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+  with pytest.raises(ValueError, match="Unable to list audio directory"):
+    asr_wer.discover_audio_files(audio_dir)
+
 
 def test_empty_completions_prompts_are_preserved(tmp_path: Path) -> None:
   request_args = asr_wer.build_completions_request_args(
@@ -205,13 +226,21 @@ def test_run_returns_configuration_error_for_unreadable_json_option_file(
   assert "Configuration error: Unable to read JSON option" in captured.err
 
 
-def test_resolve_endpoint_model_uses_transcriptions_default_without_shared_model() -> None:
+def test_resolve_endpoint_model_uses_transcriptions_default_without_shared_model(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  monkeypatch.delenv("OPENAI_MODEL", raising=False)
+  monkeypatch.delenv("OPENAI_TESTS_MODEL", raising=False)
   args = build_args("ground", "audio")
 
   assert asr_wer.resolve_endpoint_model(args) == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
 
   args = build_args("ground", "audio", "--model", "shared-model")
   assert asr_wer.resolve_endpoint_model(args) == "shared-model"
+
+  monkeypatch.setenv("OPENAI_MODEL", "env-shared-model")
+  args = build_args("ground", "audio")
+  assert asr_wer.resolve_endpoint_model(args) == "env-shared-model"
 
 
 def test_create_output_dir_avoids_eval_collisions(tmp_path: Path) -> None:
@@ -274,6 +303,56 @@ def test_ground_transcriptions_writes_exact_and_normalized_outputs(
   assert (audio_dir / "ground" / "report.txt").is_file()
   assert sent_fields[0]["prompt"] == "Names matter."
   assert sent_fields[0]["service_tier"] == "flex"
+
+
+def test_report_records_endpoint_specific_prompt_and_service_tier(tmp_path: Path) -> None:
+  result = asr_wer.FileResult(
+    audio=asr_wer.AudioInput(path=Path("clip.wav"), stem="clip", format="wav"),
+    status="transcribed",
+    transcript="Alpha",
+    normalized_transcript="alpha",
+    output_path=tmp_path / "clip.txt",
+    normalized_output_path=tmp_path / "clip_normalized.txt",
+    elapsed_seconds=1.0,
+    duration_seconds=1.0,
+    rtfx=1.0,
+    exact_word_count=1,
+    normalized_word_count=1,
+  )
+
+  transcriptions_dir = tmp_path / "transcriptions"
+  transcriptions_dir.mkdir()
+  asr_wer.write_report(
+    args=build_args("ground", str(tmp_path), "--transcriptions-prompt", "Names matter."),
+    model="asr-model",
+    output_dir=transcriptions_dir,
+    results=[result],
+    wall_elapsed_seconds=1.0,
+  )
+  transcriptions_report = (transcriptions_dir / "report.txt").read_text(encoding="utf-8")
+  assert "prompt_present: True" in transcriptions_report
+
+  completions_dir = tmp_path / "completions"
+  completions_dir.mkdir()
+  asr_wer.write_report(
+    args=build_args(
+      "ground",
+      str(tmp_path),
+      "--endpoint",
+      "completions",
+      "--completions-service-tier",
+      "scale",
+      "--developer-prompt",
+      "Use custom terms.",
+    ),
+    model="chat-model",
+    output_dir=completions_dir,
+    results=[result],
+    wall_elapsed_seconds=1.0,
+  )
+  completions_report = (completions_dir / "report.txt").read_text(encoding="utf-8")
+  assert "service_tier: scale" in completions_report
+  assert "prompt_present: True" in completions_report
 
 
 def test_default_transcriptions_payload_uses_asr_model(
@@ -462,7 +541,7 @@ def test_eval_reports_ground_os_errors(tmp_path: Path, monkeypatch: pytest.Monke
     asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
 
 
-def test_eval_rejects_empty_ground_normalized_transcripts(tmp_path: Path) -> None:
+def test_eval_allows_empty_ground_normalized_transcripts(tmp_path: Path) -> None:
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   audio_path = write_audio(audio_dir / "clip.wav")
@@ -470,8 +549,7 @@ def test_eval_rejects_empty_ground_normalized_transcripts(tmp_path: Path) -> Non
   ground_dir.mkdir()
   (ground_dir / "clip_normalized.txt").write_text(" \n\t", encoding="utf-8")
 
-  with pytest.raises(ValueError, match="Empty normalized ground transcript"):
-    asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
+  asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
 
 
 def test_eval_completions_scores_wer_and_sends_service_tier_and_prompt(
@@ -779,6 +857,7 @@ def test_plain_wer_and_normalizer_regressions() -> None:
     "you all paid 1200 dollars and one favor"
   )
   assert asr_wer.normalize_transcript("zero two thirty five") == "0 2 35"
+  assert asr_wer.normalize_transcript("zero one two") == "0 1 2"
 
 
 def test_duration_helper_uses_mutagen_file_and_handles_missing_length(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -128,9 +129,10 @@ def validate_args(args: argparse.Namespace) -> None:
     raise ValueError("prompt cannot be provided with transcriptions-prompt")
   if args.endpoint == "transcriptions" and has_explicit_completions_prompt_override(args):
     raise ValueError("completions prompt flags cannot be used with transcriptions; use prompt or transcriptions-prompt")
-  if args.endpoint == "transcriptions" and args.transcriptions_response_format in {"srt", "vtt"}:
+  if args.endpoint == "transcriptions" and args.transcriptions_response_format in {"diarized_json", "srt", "vtt"}:
     raise ValueError(
-      "transcriptions-response-format must be transcript-only for asr-wer; srt and vtt include timestamps"
+      "transcriptions-response-format must be transcript-only for asr-wer; "
+      "diarized_json, srt, and vtt include labels or timestamps"
     )
   if args.prompt is not None and args.endpoint == "completions" and has_explicit_completions_prompt_override(args):
     raise ValueError("prompt cannot be provided with completions prompt overrides")
@@ -183,9 +185,13 @@ def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
     raise ValueError(f"Audio directory does not exist: {audio_dir}")
   if not audio_dir.is_dir():
     raise ValueError(f"Audio path is not a directory: {audio_dir}")
+  try:
+    children = sorted(audio_dir.iterdir(), key=lambda child: child.name)
+  except OSError as exc:
+    raise ValueError(f"Unable to list audio directory {audio_dir}: {exc}") from exc
   audio_files = [
     AudioInput(path=path, stem=path.stem, format=path.suffix.lower().lstrip("."))
-    for path in sorted(audio_dir.iterdir(), key=lambda child: child.name)
+    for path in children
     if path.is_file() and path.suffix.lower().lstrip(".") in asr_simple.TRANSCRIPTION_CONTENT_TYPES
   ]
   if not audio_files:
@@ -257,28 +263,23 @@ def validate_eval_ground(audio_dir: Path, audio_files: list[AudioInput]) -> None
   ground_dir = audio_dir / "ground"
   missing = []
   unreadable = []
-  empty = []
   for audio_file in audio_files:
     ground_path = ground_dir / f"{audio_file.stem}_normalized.txt"
     if not ground_path.is_file():
       missing.append(audio_file.stem)
       continue
     try:
-      ground_text = ground_path.read_text(encoding="utf-8")
+      ground_path.read_text(encoding="utf-8")
     except OSError as exc:
       unreadable.append(f"{audio_file.stem}: {exc}")
       continue
     except UnicodeDecodeError as exc:
       unreadable.append(f"{audio_file.stem}: {exc}")
       continue
-    if not ground_text.strip():
-      empty.append(audio_file.stem)
   if missing:
     raise ValueError(f"Missing normalized ground transcript for: {', '.join(missing)}")
   if unreadable:
     raise ValueError(f"Unreadable normalized ground transcript: {'; '.join(unreadable)}")
-  if empty:
-    raise ValueError(f"Empty normalized ground transcript for: {', '.join(empty)}")
 
 
 def resolve_endpoint_model(args: argparse.Namespace) -> str:
@@ -286,7 +287,7 @@ def resolve_endpoint_model(args: argparse.Namespace) -> str:
 
   if args.endpoint == "completions":
     return asr_simple.resolve_model(args.completions_model or args.model)
-  fallback_model = asr_simple.resolve_model(args.model) if args.model is not None else None
+  fallback_model = args.model or os.getenv("OPENAI_MODEL") or os.getenv("OPENAI_TESTS_MODEL")
   return asr_simple.resolve_transcriptions_model_with_fallback(
     args.transcriptions_model,
     fallback_model=fallback_model,
@@ -735,8 +736,8 @@ def write_report(
     f"endpoint: {args.endpoint}",
     f"model: {model}",
     f"batch_size: {args.batch}",
-    f"service_tier: {args.service_tier or 'none'}",
-    f"prompt_present: {bool(args.prompt)}",
+    f"service_tier: {resolve_report_service_tier(args)}",
+    f"prompt_present: {has_report_prompt(args)}",
     f"output_folder: {output_dir}",
     f"total_files: {len(results)}",
     f"transcribed: {transcribed}",
@@ -758,6 +759,26 @@ def write_report(
   for result in results:
     lines.append(render_report_row(result, eval_mode=args.mode == "eval"))
   output_dir.joinpath("report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def resolve_report_service_tier(args: argparse.Namespace) -> str:
+  """Return the effective service tier represented by report metadata."""
+
+  if args.service_tier is not None:
+    return str(args.service_tier)
+  if args.endpoint == "completions" and args.completions_service_tier is not None:
+    return str(args.completions_service_tier)
+  return "none"
+
+
+def has_report_prompt(args: argparse.Namespace) -> bool:
+  """Return whether the run used an explicit prompt option."""
+
+  if args.prompt is not None:
+    return True
+  if args.endpoint == "transcriptions":
+    return args.transcriptions_prompt is not None
+  return any(getattr(args, name) is not None for name in ("system_prompt", "developer_prompt", "user_prompt"))
 
 
 def render_report_header(*, eval_mode: bool) -> str:
