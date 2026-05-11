@@ -5,7 +5,7 @@ from __future__ import annotations
 # Adapted from the English-only behavior of huggingface/open_asr_leaderboard
 # normalizer/normalizer.py at 0009f5fe216d63eea809f9849f4d4534c6ab341e.
 # Copyright 2022 The OpenAI team and The HuggingFace Team. Licensed under the
-# Apache License, Version 2.0.
+# Apache License, Version 2.0; see THIRD_PARTY_NOTICES.md.
 import re
 import unicodedata
 

@@ -91,7 +91,7 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
       build_args("ground", str(tmp_path), "--endpoint", "completions", "--completions-messages-json", "[]")
     )
 
-  with pytest.raises(ValueError, match="transcriptions-response-format must produce transcript text"):
+  with pytest.raises(ValueError, match="transcript-only"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--transcriptions-response-format", "srt"))
 
 
@@ -330,6 +330,49 @@ def test_eval_requires_matching_ground_normalized_transcript(tmp_path: Path) -> 
   (audio_dir / "ground").mkdir()
 
   assert asr_wer.run(build_args("eval", str(audio_dir))) == 2
+
+
+def test_eval_rejects_unreadable_ground_before_sending_requests(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "clip_normalized.txt").write_bytes(b"\xff")
+
+  def fail_send(**_: object) -> asr_simple.HttpExchange:
+    raise AssertionError("endpoint should not be called when ground cannot be read")
+
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fail_send)
+  assert asr_wer.run(build_args("eval", str(audio_dir))) == 2
+
+
+def test_eval_reports_ground_os_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio_path = write_audio(audio_dir / "clip.wav")
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  ground_path = ground_dir / "clip_normalized.txt"
+  ground_path.write_text("alpha", encoding="utf-8")
+  original_read_text = Path.read_text
+
+  def fake_read_text(
+    path: Path,
+    encoding: str | None = None,
+    errors: str | None = None,
+    newline: str | None = None,
+  ) -> str:
+    if path == ground_path:
+      raise OSError("permission denied")
+    return original_read_text(path, encoding=encoding, errors=errors, newline=newline)
+
+  monkeypatch.setattr(Path, "read_text", fake_read_text)
+  with pytest.raises(ValueError, match="permission denied"):
+    asr_wer.validate_eval_ground(audio_dir, [asr_wer.AudioInput(path=audio_path, stem="clip", format="wav")])
 
 
 def test_eval_completions_scores_wer_and_sends_service_tier_and_prompt(
@@ -583,6 +626,7 @@ def test_plain_wer_and_normalizer_regressions() -> None:
   assert asr_wer.compute_plain_word_error_rate("", "") == (0, 0, 0.0)
   assert asr_wer.compute_plain_word_error_rate("", "hallucinated speech") == (2, 0, 1.0)
   assert asr_wer.compute_aggregate_wer(errors=2, reference_words=0) == 1.0
+  assert asr_wer.sanitize_output_field("a\tb\nc\rd\\e") == r"a\tb\nc\rd\\e"
   skipped = asr_wer.FileResult(
     audio=asr_wer.AudioInput(path=Path("skipped.wav"), stem="skipped", format="wav"),
     status="skipped",
@@ -610,6 +654,25 @@ def test_plain_wer_and_normalizer_regressions() -> None:
     normalized_word_count=1,
   )
   assert asr_wer.compute_aggregate_rtfx([skipped, transcribed], wall_elapsed_seconds=2.0) == 5.0
+  unsafe = asr_wer.FileResult(
+    audio=asr_wer.AudioInput(path=Path("bad\tname.wav"), stem="bad\tname", format="wav"),
+    status="failed",
+    transcript="",
+    normalized_transcript="",
+    output_path=Path("out") / "bad\tname.txt",
+    normalized_output_path=Path("out") / "bad\tname_normalized.txt",
+    elapsed_seconds=1.0,
+    duration_seconds=1.0,
+    rtfx=1.0,
+    exact_word_count=0,
+    normalized_word_count=0,
+    error_message="line one\nline two",
+  )
+  assert "\n" not in asr_wer.format_file_result(unsafe, mode="ground")
+  assert "line one\\nline two" in asr_wer.format_file_result(unsafe, mode="ground")
+  row = asr_wer.render_report_row(unsafe, eval_mode=False)
+  assert row.count("\t") == len(asr_wer.render_report_header(eval_mode=False).split("\t")) - 1
+  assert "bad\\tname" in row
   assert asr_wer.normalize_transcript("Um, I can\u2019t analyse the colour in caf\u00e9 number twenty-one.") == (
     "i can not analyze the color in cafe number 21"
   )

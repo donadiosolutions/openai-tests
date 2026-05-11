@@ -126,7 +126,9 @@ def validate_args(args: argparse.Namespace) -> None:
   if args.prompt and args.endpoint == "transcriptions" and args.transcriptions_prompt:
     raise ValueError("prompt cannot be provided with transcriptions-prompt")
   if args.endpoint == "transcriptions" and args.transcriptions_response_format in {"srt", "vtt"}:
-    raise ValueError("transcriptions-response-format must produce transcript text for asr-wer")
+    raise ValueError(
+      "transcriptions-response-format must be transcript-only for asr-wer; srt and vtt include timestamps"
+    )
   if args.prompt and args.endpoint == "completions" and has_explicit_completions_prompt_override(args):
     raise ValueError("prompt cannot be provided with completions prompt overrides")
   if args.endpoint == "completions" and args.completions_messages_json is not None:
@@ -213,11 +215,23 @@ def validate_eval_ground(audio_dir: Path, audio_files: list[AudioInput]) -> None
   """Ensure eval mode has a normalized ground transcript for every file."""
 
   ground_dir = audio_dir / "ground"
-  missing = [
-    audio_file.stem for audio_file in audio_files if not (ground_dir / f"{audio_file.stem}_normalized.txt").is_file()
-  ]
+  missing = []
+  unreadable = []
+  for audio_file in audio_files:
+    ground_path = ground_dir / f"{audio_file.stem}_normalized.txt"
+    if not ground_path.is_file():
+      missing.append(audio_file.stem)
+      continue
+    try:
+      ground_path.read_text(encoding="utf-8")
+    except OSError as exc:
+      unreadable.append(f"{audio_file.stem}: {exc}")
+    except UnicodeDecodeError as exc:
+      unreadable.append(f"{audio_file.stem}: {exc}")
   if missing:
     raise ValueError(f"Missing normalized ground transcript for: {', '.join(missing)}")
+  if unreadable:
+    raise ValueError(f"Unreadable normalized ground transcript: {'; '.join(unreadable)}")
 
 
 def resolve_endpoint_model(args: argparse.Namespace) -> str:
@@ -612,7 +626,8 @@ def format_file_result(result: FileResult, *, mode: str) -> str:
   elapsed = "n/a" if result.elapsed_seconds is None else f"{result.elapsed_seconds:.2f}s"
   rtfx = "n/a" if result.rtfx is None else f"{result.rtfx:.2f}x"
   common = (
-    f"{result.audio.path.name}: {result.status}, elapsed={elapsed}, duration={result.duration_seconds:.2f}s, "
+    f"{sanitize_output_field(result.audio.path.name)}: {result.status}, elapsed={elapsed}, "
+    f"duration={result.duration_seconds:.2f}s, "
     f"RTFx={rtfx}, exact_words={result.exact_word_count}, normalized_words={result.normalized_word_count}"
   )
   if mode == "eval" and result.wer is not None:
@@ -621,8 +636,14 @@ def format_file_result(result: FileResult, *, mode: str) -> str:
       f"reference_words={result.reference_word_count}"
     )
   if result.error_message:
-    common += f", error={result.error_message}"
-  return f"{common}, output={result.output_path}"
+    common += f", error={sanitize_output_field(result.error_message)}"
+  return f"{common}, output={sanitize_output_field(str(result.output_path))}"
+
+
+def sanitize_output_field(value: str) -> str:
+  """Escape control characters before rendering terminal or TSV output."""
+
+  return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
 
 
 def print_final_stats(results: list[FileResult], *, mode: str, wall_elapsed_seconds: float) -> None:
@@ -711,7 +732,7 @@ def render_report_row(result: FileResult, *, eval_mode: bool) -> str:
   """Render one tab-separated report row."""
 
   columns = [
-    result.audio.path.name,
+    sanitize_output_field(result.audio.path.name),
     result.status,
     "" if result.elapsed_seconds is None else f"{result.elapsed_seconds:.2f}",
     f"{result.duration_seconds:.2f}",
@@ -728,7 +749,7 @@ def render_report_row(result: FileResult, *, eval_mode: bool) -> str:
         "" if result.wer_reference_words is None else str(result.wer_reference_words),
       )
     )
-  columns.extend((str(result.output_path), result.error_message or ""))
+  columns.extend((sanitize_output_field(str(result.output_path)), sanitize_output_field(result.error_message or "")))
   return "\t".join(columns)
 
 
