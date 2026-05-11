@@ -471,11 +471,6 @@ def test_default_transcriptions_payload_uses_asr_model(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Verifies that running ground mode without an explicit model sends the default transcriptions model in the request.
-  
-  Asserts that the multipart request captured by the patched transport contains `asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL` as the `model` field.
-  """
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
@@ -940,15 +935,6 @@ def test_batch_limits_concurrent_transcriptions(
 
 
 def write_prep_manifest(audio_dir: Path, *, overlap: float = 3.0) -> None:
-  """
-  Create a small prepared-audio manifest and two placeholder chunk WAV files under audio_dir/prep for use in tests.
-  
-  The function creates the directory audio_dir/prep, writes two dummy WAV files, and writes a JSON manifest named manifest.json describing a single source ("call.wav") split into two chunks. The manifest's "overlap_seconds" field is set from the overlap parameter.
-  
-  Parameters:
-  	audio_dir (Path): Root directory in which to create the prep/ subdirectory and manifest.
-  	overlap (float): Value to set for "overlap_seconds" in the manifest; defaults to 3.0.
-  """
   prep_dir = audio_dir / "prep"
   prep_dir.mkdir()
   for name in ("call_0000_000000_030000.wav", "call_0001_027000_050000.wav"):
@@ -1287,16 +1273,6 @@ def test_prepared_ground_reads_chunks_and_writes_combined_root_artifacts(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Verifies prepared-mode ground processing reads manifest chunks, transcribes each chunk, and writes combined and chunk-level artifacts.
-  
-  Asserts that:
-  - transcriptions are requested for chunk audio files in manifest order,
-  - the combined exact transcript file contains chunk transcripts joined by newline,
-  - the combined normalized transcript contains the stitched normalized text,
-  - per-chunk transcript files are written under ground/chunks/,
-  - the report records the temperature, marks the source as prepared, includes the prep folder, reports chunk counts, and lists the source as transcribed.
-  """
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "call.wav")
@@ -1305,21 +1281,6 @@ def test_prepared_ground_reads_chunks_and_writes_combined_root_artifacts(
   transcripts = iter(["Alpha Bravo repeated", "repeated Charlie"])
 
   def fake_transcribe(**kwargs: object) -> str:
-    """
-    Test helper that simulates a transcription provider: records the audio filename and returns the next transcript string.
-    
-    Parameters:
-        **kwargs: Expects an `audio_file` keyword argument of type `asr_wer.AudioInput`.
-    
-    Side effects:
-        Appends `audio_file.path.name` to the external `seen_files` list and advances the external `transcripts` iterator.
-    
-    Returns:
-        transcript (str): The next transcript produced by the `transcripts` iterator.
-    
-    Raises:
-        AssertionError: If `audio_file` is missing or is not an `asr_wer.AudioInput`.
-    """
     audio_file = kwargs["audio_file"]
     assert isinstance(audio_file, asr_wer.AudioInput)
     seen_files.append(audio_file.path.name)
@@ -1346,11 +1307,6 @@ def test_prepared_eval_requires_combined_ground_and_honors_batch(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Verifies that eval mode with `--prep` requires combined ground outputs before sending requests and respects the requested batch concurrency.
-  
-  After confirming `run(... eval --prep ...)` fails when combined ground artifacts are missing, this test creates combined ground outputs, injects a fake transcription worker, and runs eval with `--prep --batch 2`. It asserts the run succeeds, the peak concurrent transcription workers does not exceed the batch size, the combined normalized output is correctly produced, and the generated report marks the source as prepared and contains a 0.00% WER entry.
-  """
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "call.wav")
@@ -1367,15 +1323,6 @@ def test_prepared_eval_requires_combined_ground_and_honors_batch(
   lock = threading.Lock()
 
   def fake_transcribe(**kwargs: object) -> str:
-    """
-    Fake transcription function used by tests that returns a deterministic transcript based on the provided audio file.
-    
-    Parameters:
-        **kwargs: Contains an `audio_file` key whose value must be an `asr_wer.AudioInput` representing the file to transcribe.
-    
-    Returns:
-        str: `"Alpha bravo"` if `audio_file.path.name` ends with `"030000.wav"`, `"charlie"` otherwise.
-    """
     nonlocal active, max_active
     with lock:
       active += 1
@@ -1434,18 +1381,6 @@ def test_prepared_failed_chunk_fails_parent_original(
   write_prep_manifest(audio_dir)
 
   def fake_transcribe(**kwargs: object) -> str:
-    """
-    Test helper that returns a fixed transcript or simulates a provider failure for a specific file.
-    
-    Parameters:
-        audio_file (asr_wer.AudioInput): The audio input to transcribe; expected to provide a Path via `audio_file.path`.
-    
-    Returns:
-        str: The transcript text `"Alpha"`.
-    
-    Raises:
-        ValueError: If `audio_file.path.name` ends with `"050000.wav"`, raises `ValueError("provider failed")` to simulate a provider error.
-    """
     audio_file = kwargs["audio_file"]
     assert isinstance(audio_file, asr_wer.AudioInput)
     if audio_file.path.name.endswith("050000.wav"):
@@ -1498,16 +1433,6 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   assert "missing chunk transcripts" in str(missing_chunk_result.error_message)
 
   def fail_write(path: Path, text: str) -> None:
-    """
-    Simulate a failing atomic write by always raising an OSError("disk full").
-    
-    Parameters:
-        path (Path): Target path for the write (ignored).
-        text (str): Text to write (ignored).
-    
-    Raises:
-        OSError: Always raised with message "disk full".
-    """
     raise OSError("disk full")
 
   monkeypatch.setattr(asr_wer, "atomic_write_text", fail_write)
@@ -1559,12 +1484,6 @@ def test_process_prepared_sources_uses_existing_combined_ground(
   (output_dir / "call_normalized.txt").write_text("alpha", encoding="utf-8")
 
   def fail_transcribe(**_: object) -> str:
-    """
-    Fail the test if called to indicate a prepared-ground chunk transcription was requested when it should have been skipped.
-    
-    Raises:
-        AssertionError: always raised with message "prepared ground skip should not send chunk requests".
-    """
     raise AssertionError("prepared ground skip should not send chunk requests")
 
   monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", fail_transcribe)
@@ -1606,11 +1525,6 @@ def test_prepare_prepared_chunks_output_dir_reports_os_errors(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Verifies prepare_prepared_chunks_output_dir reports an error when creating the prepared chunks output directory fails due to an OS-level permission error.
-  
-  The test monkeypatches Path.mkdir to raise PermissionError when attempting to create the "chunks" subdirectory and asserts that the function returns a non-None error string containing "Unable to create prepared chunks output directory".
-  """
   output_dir = tmp_path / "ground"
   original_mkdir = Path.mkdir
 
@@ -1620,18 +1534,6 @@ def test_prepare_prepared_chunks_output_dir_reports_os_errors(
     parents: bool = False,
     exist_ok: bool = False,
   ) -> None:
-    """
-    Raise PermissionError when attempting to create the prepared chunks output directory; otherwise create the directory using the original mkdir implementation.
-    
-    Parameters:
-        path (Path): The directory path to create. If this equals `output_dir / "chunks"`, a PermissionError is raised.
-        mode (int): Permission mode passed to the underlying mkdir.
-        parents (bool): Whether to create parent directories.
-        exist_ok (bool): Whether existence is tolerated.
-    
-    Raises:
-        PermissionError: If `path` is `output_dir / "chunks"`.
-    """
     if path == output_dir / "chunks":
       raise PermissionError("denied")
     original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)

@@ -11,30 +11,12 @@ from openai_tests.test_modules import asr_prep
 
 
 def build_args(*raw_args: str) -> argparse.Namespace:
-  """
-  Create an ArgumentParser configured for the ASR prep CLI and parse the given raw argument strings.
-  
-  Parameters:
-      *raw_args (str): CLI-style argument tokens (e.g., directory paths and option flags) to be parsed.
-  
-  Returns:
-      argparse.Namespace: The parsed argument namespace as produced by the configured parser.
-  """
   parser = argparse.ArgumentParser()
   asr_prep.configure_parser(parser)
   return parser.parse_args([*raw_args])
 
 
 def write_audio(path: Path) -> Path:
-  """
-  Write a minimal RIFF-format placeholder file at the given path and return that path.
-  
-  Parameters:
-      path (Path): Destination filesystem path for the placeholder audio file.
-  
-  Returns:
-      Path: The same Path that was written.
-  """
   path.write_bytes(b"RIFF")
   return path
 
@@ -102,12 +84,6 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   (prep_dir / "old.wav").unlink()
 
   def missing_ffmpeg(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
-    """
-    Simulate the absence of the ffmpeg executable by raising FileNotFoundError.
-    
-    Raises:
-        FileNotFoundError: Always raised with message "ffmpeg".
-    """
     raise FileNotFoundError("ffmpeg")
 
   monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 1.0)
@@ -121,34 +97,12 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Verifies that run() detects and reports filesystem and duration-reading failures for audio and prep directories.
-  
-  Exercises these failure modes and asserts run() returns exit code 2 and writes the expected stderr message for each:
-  - unable to list the audio directory (PermissionError when iterating audio_dir)
-  - prep output path exists but is not a directory
-  - unable to create the prep output directory (PermissionError on mkdir)
-  - unable to list the prep output directory (PermissionError when iterating prep)
-  - unable to read audio duration (get_audio_duration_seconds raises ValueError)
-  """
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
   original_iterdir = Path.iterdir
 
   def fail_audio_iterdir(path: Path):
-    """
-    Simulate a permission-denied error for a specific directory listing, otherwise return the directory entries.
-    
-    Parameters:
-        path (Path): The path to list.
-    
-    Returns:
-        Iterator[Path]: The directory entries produced by the original iterdir for `path`.
-    
-    Raises:
-        PermissionError: If `path` is equal to the test `audio_dir`, to emulate a denied directory listing.
-    """
     if path == audio_dir:
       raise PermissionError("denied")
     return original_iterdir(path)
@@ -171,17 +125,6 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
     parents: bool = False,
     exist_ok: bool = False,
   ) -> None:
-    """
-    Simulate a failing Path.mkdir that denies creation of the test prep directory.
-    
-    When called with a path equal to audio_dir / "prep", raises PermissionError("denied"); otherwise performs directory creation using the original mkdir behaviour.
-    
-    Parameters:
-        path (Path): Target path to create.
-        mode (int): Permission mode passed to the underlying mkdir.
-        parents (bool): Whether to create parent directories.
-        exist_ok (bool): Whether to ignore existing directories.
-    """
     if path == audio_dir / "prep":
       raise PermissionError("denied")
     original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
@@ -194,18 +137,6 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   (audio_dir / "prep").mkdir()
 
   def fail_prep_iterdir(path: Path):
-    """
-    Conditionally raises PermissionError for the "prep" subdirectory; otherwise returns the directory iterator.
-    
-    Parameters:
-        path (Path): Directory path to iterate.
-    
-    Returns:
-        An iterator of Path entries from the given directory.
-    
-    Raises:
-        PermissionError: If `path` equals `audio_dir / "prep"`.
-    """
     if path == audio_dir / "prep":
       raise PermissionError("denied")
     return original_iterdir(path)
@@ -233,14 +164,6 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
   )
 
   def fail_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
-    """
-    Simulate an ffmpeg subprocess failure by always raising a CalledProcessError with stderr "nope".
-    
-    This callable accepts any arguments and unconditionally raises subprocess.CalledProcessError(1, ["ffmpeg"], stderr="nope") to mimic a failed ffmpeg invocation.
-    
-    Raises:
-        subprocess.CalledProcessError: Always raised with return code 1 and stderr "nope".
-    """
     raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="nope")
 
   monkeypatch.setattr(asr_prep.subprocess, "run", fail_run)
@@ -334,11 +257,6 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
-  """
-  Integration test that runs asr_prep.run() with ffmpeg and verifies produced commands and output artifacts.
-  
-  Stubs `get_audio_duration_seconds` to return 31.0 and replaces `subprocess.run` with a fake that records ffmpeg command arguments and creates chunk files. Asserts the CLI run returns exit code 0, that two specific ffmpeg invocations were executed with the expected start times, durations, and output paths, and that the generated prep/manifest.json and prep/report.txt contain the expected segment metadata, source entry, chunk listing, and report text.
-  """
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "call.wav")
@@ -347,16 +265,6 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
   monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 31.0)
 
   def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-    """
-    Simulate subprocess.run in tests by recording the invoked command, creating the intended output file, and verifying expected call options.
-    
-    Parameters:
-        command (list[str]): The command and its arguments; the last element is treated as the output file path and is created with RIFF bytes.
-        **kwargs: Additional keyword arguments passed to subprocess.run; this fake asserts that `check`, `capture_output`, and `text` are True.
-    
-    Returns:
-        subprocess.CompletedProcess[str]: A CompletedProcess with returncode 0 and empty stdout/stderr.
-    """
     commands.append(command)
     Path(command[-1]).write_bytes(b"RIFF")
     assert kwargs["check"] is True
