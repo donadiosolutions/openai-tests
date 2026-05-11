@@ -1011,7 +1011,7 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
       {
         "overlap_seconds": 3.0,
         "segment_duration_seconds": 30.0,
-        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1}],
         "chunks": ["bad"],
       }
     ),
@@ -1025,7 +1025,7 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
       {
         "overlap_seconds": 3.0,
         "segment_duration_seconds": 30.0,
-        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1}],
         "chunks": [
           {
             "source_file": "call.wav",
@@ -1048,7 +1048,7 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   unsafe_base = {
     "overlap_seconds": 3.0,
     "segment_duration_seconds": 30.0,
-    "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+    "sources": [{"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1}],
     "chunks": [
       {
         "source_file": "call.wav",
@@ -1106,6 +1106,27 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match=r"duplicate chunk_index 0 for call\.wav"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  missing_chunk_source = dict(unsafe_base)
+  missing_chunk_source["sources"] = [
+    {"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1},
+    {"source_file": "other.wav", "duration_seconds": 1.0, "chunk_count": 1},
+  ]
+  manifest_path.write_text(json.dumps(missing_chunk_source), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"sources without chunks: other\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  undeclared_chunk_source = dict(unsafe_base)
+  undeclared_chunk_source["sources"] = []
+  manifest_path.write_text(json.dumps(undeclared_chunk_source), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunks for undeclared sources: call\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  wrong_chunk_count = dict(unsafe_base)
+  wrong_chunk_count["sources"] = [{"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 2}]
+  manifest_path.write_text(json.dumps(wrong_chunk_count), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk_count for call\.wav is 2"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   manifest_path.write_text(
     json.dumps({"overlap_seconds": True, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
     encoding="utf-8",
@@ -1128,6 +1149,8 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
     asr_wer.require_manifest_stem({"source_stem": "/tmp/call"}, "source_stem")
   with pytest.raises(ValueError, match="numeric duration_seconds"):
     asr_wer.require_manifest_number({"duration_seconds": "1"}, "duration_seconds")
+  with pytest.raises(ValueError, match="finite numeric duration_seconds"):
+    asr_wer.require_manifest_number({"duration_seconds": float("inf")}, "duration_seconds")
   with pytest.raises(ValueError, match="integer chunk_index"):
     asr_wer.require_manifest_integer({"chunk_index": True}, "chunk_index")
 
@@ -1483,6 +1506,38 @@ def test_process_prepared_sources_uses_per_source_finish_times(
   )
 
   assert [result.elapsed_seconds for result in results] == [90.0, 81.0]
+
+
+def test_transcribe_prepared_chunk_starts_timer_inside_worker(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  source = asr_wer.AudioInput(path=tmp_path / "call.wav", stem="call", format="wav")
+  chunk = asr_wer.PreparedChunk(
+    audio=asr_wer.AudioInput(path=tmp_path / "prep" / "call_0000_000000_030000.wav", stem="chunk", format="wav"),
+    source=source,
+    index=0,
+    start_seconds=0.0,
+    end_seconds=30.0,
+    duration_seconds=30.0,
+  )
+  started_by_source: dict[str, float] = {}
+  monkeypatch.setattr(asr_wer.time, "perf_counter", lambda: 123.0)
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
+
+  assert (
+    asr_wer.transcribe_prepared_chunk(
+      args=build_args("ground", str(tmp_path), "--prep"),
+      chunk=chunk,
+      base_url="https://example.com",
+      api_key=None,
+      started_by_source=started_by_source,
+      timing_lock=threading.Lock(),
+    )
+    == "Alpha"
+  )
+
+  assert started_by_source == {"call.wav": 123.0}
 
 
 def test_prepared_chunk_error_without_missing_chunks(tmp_path: Path) -> None:

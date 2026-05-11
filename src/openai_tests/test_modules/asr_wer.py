@@ -304,11 +304,13 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     raise ValueError("Prepared manifest requires sources and chunks arrays")
 
   source_durations: dict[str, float] = {}
+  source_chunk_counts: dict[str, int] = {}
   for source_raw in sources_raw:
     if not isinstance(source_raw, dict) or not isinstance(source_raw.get("source_file"), str):
       raise ValueError("Prepared manifest source rows must include source_file")
     source_file = require_manifest_filename(source_raw, "source_file")
     source_durations[source_file] = require_manifest_number(source_raw, "duration_seconds")
+    source_chunk_counts[source_file] = require_manifest_integer(source_raw, "chunk_count")
 
   grouped: dict[str, list[PreparedChunk]] = {}
   seen_chunk_indices: dict[str, set[int]] = {}
@@ -346,11 +348,30 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
       )
     )
 
+  declared_sources = set(source_durations)
+  chunk_sources = set(grouped)
+  if declared_sources != chunk_sources:
+    missing_chunks = sorted(declared_sources - chunk_sources)
+    undeclared_chunks = sorted(chunk_sources - declared_sources)
+    details = []
+    if missing_chunks:
+      details.append(f"sources without chunks: {', '.join(missing_chunks)}")
+    if undeclared_chunks:
+      details.append(f"chunks for undeclared sources: {', '.join(undeclared_chunks)}")
+    raise ValueError(f"Prepared manifest source/chunk mismatch: {'; '.join(details)}")
+  for source_file, expected_chunk_count in source_chunk_counts.items():
+    actual_chunk_count = len(grouped[source_file])
+    if expected_chunk_count != actual_chunk_count:
+      raise ValueError(
+        f"Prepared manifest chunk_count for {source_file} is {expected_chunk_count}, "
+        f"but {actual_chunk_count} chunk rows were found"
+      )
+
   prepared_sources = [
     PreparedSource(
       audio=chunks[0].source,
       chunks=tuple(sorted(chunks, key=lambda chunk: chunk.index)),
-      duration_seconds=source_durations.get(source_file, sum(chunk.duration_seconds for chunk in chunks)),
+      duration_seconds=source_durations[source_file],
       overlap_seconds=overlap,
       segment_duration_seconds=segment_duration,
     )
@@ -387,6 +408,8 @@ def require_manifest_number(row: dict[str, Any], key: str) -> float:
   value = row.get(key)
   if not isinstance(value, (int, float)) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires numeric {key}")
+  if not math.isfinite(value):
+    raise ValueError(f"Prepared manifest row requires finite numeric {key}")
   return float(value)
 
 
@@ -542,6 +565,7 @@ def process_prepared_sources(
   started_by_source: dict[str, float] = {}
   finished_by_source: dict[str, float] = {}
   remaining_by_source: dict[str, int] = {source.audio.path.name: len(source.chunks) for source in prepared_sources}
+  timing_lock = threading.Lock()
 
   with tqdm(total=len(all_chunks), unit="chunk") as progress:
     with ThreadPoolExecutor(max_workers=args.batch) as executor:
@@ -553,15 +577,16 @@ def process_prepared_sources(
           progress.update(len(source.chunks))
           tqdm.write(format_file_result(skipped_result, mode=args.mode))
           continue
-        started_by_source[source.audio.path.name] = time.perf_counter()
         for chunk in source.chunks:
           futures[
             executor.submit(
-              transcribe_with_selected_endpoint,
+              transcribe_prepared_chunk,
               args=args,
-              audio_file=chunk.audio,
+              chunk=chunk,
               base_url=base_url,
               api_key=api_key,
+              started_by_source=started_by_source,
+              timing_lock=timing_lock,
             )
           ] = chunk
 
@@ -596,6 +621,23 @@ def process_prepared_sources(
     tqdm.write(format_file_result(results_by_source[source.audio.path.name], mode=args.mode))
 
   return [results_by_source[source.audio.path.name] for source in prepared_sources]
+
+
+def transcribe_prepared_chunk(
+  *,
+  args: argparse.Namespace,
+  chunk: PreparedChunk,
+  base_url: str,
+  api_key: str | None,
+  started_by_source: dict[str, float],
+  timing_lock: threading.Lock,
+) -> str:
+  """Transcribe one prepared chunk and mark its source start at worker execution time."""
+
+  with timing_lock:
+    if chunk.source.path.name not in started_by_source:
+      started_by_source[chunk.source.path.name] = time.perf_counter()
+  return transcribe_with_selected_endpoint(args=args, audio_file=chunk.audio, base_url=base_url, api_key=api_key)
 
 
 def prepare_prepared_chunks_output_dir(output_dir: Path) -> str | None:
