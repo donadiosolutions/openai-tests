@@ -473,6 +473,48 @@ def test_default_transcriptions_payload_uses_asr_model(
   assert sent_fields[0]["model"] == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
 
 
+def test_transcript_write_failure_does_not_leave_partial_artifacts(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  audio = write_audio(audio_dir / "clip.wav")
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+  exact_path = output_dir / "clip.txt"
+  original_write_text = Path.write_text
+
+  def partial_write_then_fail(
+    path: Path,
+    data: str,
+    encoding: str | None = None,
+    errors: str | None = None,
+    newline: str | None = None,
+  ) -> int:
+    if path in {exact_path, exact_path.with_suffix(".txt.tmp")}:
+      original_write_text(path, data[:2], encoding=encoding, errors=errors, newline=newline)
+      raise OSError("disk full")
+    return original_write_text(path, data, encoding=encoding, errors=errors, newline=newline)
+
+  monkeypatch.setattr(Path, "write_text", partial_write_then_fail)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 1.0)
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
+
+  result = asr_wer.transcribe_audio_file(
+    args=build_args("ground", str(audio_dir)),
+    audio_file=asr_wer.AudioInput(path=audio, stem="clip", format="wav"),
+    output_dir=output_dir,
+    base_url="https://example.com",
+    api_key=None,
+  )
+
+  assert result.status == "failed"
+  assert not exact_path.exists()
+  assert not exact_path.with_suffix(".txt.tmp").exists()
+  assert not (output_dir / "clip_normalized.txt").exists()
+
+
 def test_verbose_transcriptions_prints_http_exchange(
   capsys: pytest.CaptureFixture[str],
   monkeypatch: pytest.MonkeyPatch,

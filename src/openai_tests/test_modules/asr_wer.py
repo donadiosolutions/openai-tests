@@ -406,8 +406,8 @@ def transcribe_audio_file(
     )
     elapsed = max(time.perf_counter() - started_at, 0.0)
     normalized = normalize_transcript(transcript)
-    exact_path.write_text(transcript, encoding="utf-8")
-    normalized_path.write_text(normalized, encoding="utf-8")
+    atomic_write_text(exact_path, transcript)
+    atomic_write_text(normalized_path, normalized)
     status = "transcribed"
     error_message = None
   except Exception as exc:
@@ -450,6 +450,18 @@ def transcribe_audio_file(
         error_message=str(exc),
       )
   return result
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+  """Write text via a temporary sibling before replacing the final path."""
+
+  temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+  try:
+    temporary_path.write_text(text, encoding="utf-8")
+    temporary_path.replace(path)
+  except Exception:
+    temporary_path.unlink(missing_ok=True)
+    raise
 
 
 def build_failed_file_result(
