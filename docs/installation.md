@@ -12,6 +12,10 @@ The `asr-simple` module does not need `espeak-ng` for its default bundled MP3
 fixtures. `espeak-ng` is only needed when you want the CLI to synthesize custom
 written text by passing `--expected-transcript` without `--audio-file`.
 
+The `asr-prep` module requires `ffmpeg` on `PATH` because it writes prepared
+PCM WAV chunks for `asr-wer --prep` runs. It does not perform loudness or audio
+normalization.
+
 ## Bootstrap
 
 Install the project and development dependencies:
@@ -58,9 +62,11 @@ produce endpoint URLs under `/v1/...`.
 
 `text-simple` uses `--model`, `OPENAI_MODEL`, `OPENAI_TESTS_MODEL`, or `gpt-4.1-mini`.
 
-`asr-simple` uses `--model`, `OPENAI_MODEL`, `OPENAI_TESTS_MODEL`, or `gpt-4o-audio-preview` for chat completions. It uses
-`--transcriptions-model`, `OPENAI_TRANSCRIPTIONS_MODEL`, or `OPENAI_TESTS_TRANSCRIPTIONS_MODEL` for audio transcriptions when those are
-set; otherwise it reuses the resolved `--model` value.
+`asr-simple` and `asr-wer` use `--model`, `OPENAI_MODEL`,
+`OPENAI_TESTS_MODEL`, or `gpt-4o-audio-preview` for chat completions. They use
+`--transcriptions-model`, `OPENAI_TRANSCRIPTIONS_MODEL`, or
+`OPENAI_TESTS_TRANSCRIPTIONS_MODEL` for audio transcriptions when those are set;
+otherwise they reuse the resolved `--model` value.
 
 ## Local Verification
 

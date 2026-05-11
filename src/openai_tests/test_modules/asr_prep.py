@@ -1,0 +1,409 @@
+"""Deterministic audio segmentation for prepared ASR WER runs."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import mutagen
+
+from ..core import EndpointTestModule
+from . import asr_simple
+
+SEGMENT_DURATION_SECONDS = 30.0
+DEFAULT_OVERLAP_SECONDS = 3.0
+TIMING_TOLERANCE_SECONDS = 0.001
+
+
+@dataclass(frozen=True, slots=True)
+class AudioInput:
+  """Supported direct-child audio file selected for preparation."""
+
+  path: Path
+  stem: str
+  format: str
+
+
+@dataclass(frozen=True, slots=True)
+class Segment:
+  """Planned deterministic chunk emitted from one source audio file."""
+
+  source_path: Path
+  source_file: str
+  source_stem: str
+  chunk_path: Path
+  index: int
+  start_seconds: float
+  end_seconds: float
+  duration_seconds: float
+
+
+def configure_parser(parser: argparse.ArgumentParser) -> None:
+  """Register asr-prep command-line arguments."""
+
+  parser.add_argument("audio_dir", help="Directory containing supported direct-child audio files.")
+  parser.add_argument(
+    "--overlap",
+    type=float,
+    default=DEFAULT_OVERLAP_SECONDS,
+    help="Seconds of overlap between 30-second chunks. Defaults to 3.0.",
+  )
+
+
+def run(args: argparse.Namespace) -> int:
+  """Create deterministic prep chunks, a manifest, and a report."""
+
+  try:
+    overlap = validate_overlap(args.overlap)
+    audio_dir = Path(args.audio_dir)
+    audio_files = discover_audio_files(audio_dir)
+    prep_dir = prepare_output_dir(audio_dir)
+    prep_tmp_dir = prepare_temp_output_dir(audio_dir)
+    all_segments: list[Segment] = []
+    source_rows: list[dict[str, Any]] = []
+    try:
+      for audio_file in audio_files:
+        try:
+          duration = get_audio_duration_seconds(audio_file.path)
+        except Exception as exc:
+          raise ValueError(f"Unable to read audio duration for {audio_file.path.name}: {exc}") from exc
+        duration = round(duration, 3)
+        if duration <= 0:
+          raise ValueError(f"Audio duration for {audio_file.path.name} rounds to 0 seconds")
+        segments = plan_segments(
+          audio_file,
+          duration_seconds=duration,
+          overlap_seconds=overlap,
+          output_dir=prep_tmp_dir,
+        )
+        for segment in segments:
+          run_ffmpeg_segment(segment)
+        all_segments.extend(segments)
+        source_rows.append(
+          {
+            "source_file": audio_file.path.name,
+            "duration_seconds": duration,
+            "chunk_count": len(segments),
+          }
+        )
+      write_manifest(prep_tmp_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
+      write_report(prep_tmp_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
+      finalize_output_dir(prep_tmp_dir, prep_dir)
+    except Exception:
+      cleanup_temp_output_dir(prep_tmp_dir)
+      raise
+  except ValueError as exc:
+    print(f"Configuration error: {exc}", file=sys.stderr)
+    return 2
+  print(f"Wrote {len(all_segments)} chunks to {prep_dir}")
+  return 0
+
+
+def validate_overlap(overlap: float) -> float:
+  """Validate overlap seconds for fixed thirty-second chunks."""
+
+  if not math.isfinite(overlap):
+    raise ValueError("overlap must be finite")
+  overlap = round(overlap, 3)
+  if overlap < 0:
+    raise ValueError("overlap must be at least 0 seconds")
+  if overlap >= SEGMENT_DURATION_SECONDS:
+    raise ValueError("overlap must be less than 30 seconds")
+  return overlap
+
+
+def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
+  """Return supported direct-child audio files from an audio directory."""
+
+  if not audio_dir.exists():
+    raise ValueError(f"Audio directory does not exist: {audio_dir}")
+  if not audio_dir.is_dir():
+    raise ValueError(f"Audio path is not a directory: {audio_dir}")
+  try:
+    children = sorted(audio_dir.iterdir(), key=lambda child: child.name)
+  except OSError as exc:
+    raise ValueError(f"Unable to list audio directory {audio_dir}: {exc}") from exc
+  audio_files = [
+    AudioInput(path=path, stem=path.stem, format=path.suffix.lower().lstrip("."))
+    for path in children
+    if path.is_file() and path.suffix.lower().lstrip(".") in asr_simple.TRANSCRIPTION_CONTENT_TYPES
+  ]
+  if not audio_files:
+    supported = ", ".join(sorted(asr_simple.TRANSCRIPTION_CONTENT_TYPES))
+    raise ValueError(f"No supported audio files found in {audio_dir}; expected extensions: {supported}")
+  validate_audio_inputs(audio_files)
+  return audio_files
+
+
+def validate_audio_inputs(audio_files: list[AudioInput]) -> None:
+  """Reject input sets that would generate ambiguous prepared artifacts."""
+
+  stems: dict[str, Path] = {}
+  for audio_file in audio_files:
+    validate_plain_filename(audio_file.path.name, "source filename")
+    validate_plain_filename(audio_file.stem, "source filename stem")
+    stem_key = audio_file.stem.casefold()
+    if stem_key in stems:
+      raise ValueError(
+        f"Duplicate audio file stem {audio_file.stem!r}: {stems[stem_key].name} and {audio_file.path.name}"
+      )
+    stems[stem_key] = audio_file.path
+  validate_output_artifact_names(audio_files)
+
+
+def validate_plain_filename(value: str, kind: str) -> None:
+  """Reject path-like or reserved names from source-derived artifacts."""
+
+  if (
+    not value
+    or Path(value).is_absolute()
+    or Path(value).anchor
+    or ":" in value
+    or "/" in value
+    or "\\" in value
+    or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    or value
+    in {
+      ".",
+      "..",
+    }
+  ):
+    raise ValueError(f"Audio input {kind} must be a plain filename")
+
+
+def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
+  """Reject source stems that asr-wer cannot consume after preparation."""
+
+  artifact_owner: dict[str, str] = {}
+  for audio_file in audio_files:
+    for artifact_name, kind in (
+      (f"{audio_file.stem}.txt", "exact transcript"),
+      (f"{audio_file.stem}_normalized.txt", "normalized transcript"),
+    ):
+      artifact_key = artifact_name.casefold()
+      if artifact_key == "report.txt":
+        raise ValueError(f"Audio stem {audio_file.stem!r} uses reserved output artifact {artifact_name!r}")
+      previous = artifact_owner.get(artifact_key)
+      if previous is not None:
+        raise ValueError(
+          f"Output artifact collision for {artifact_name!r}: {previous} and {audio_file.path.name} {kind}"
+        )
+      artifact_owner[artifact_key] = f"{audio_file.path.name} {kind}"
+
+
+def prepare_output_dir(audio_dir: Path) -> Path:
+  """Validate the final prep output directory before staging work."""
+
+  prep_dir = audio_dir / "prep"
+  if prep_dir.is_symlink():
+    raise ValueError(f"Prep output path must not be a symlink: {prep_dir}")
+  if prep_dir.exists() and not prep_dir.is_dir():
+    raise ValueError(f"Prep output path is not a directory: {prep_dir}")
+  try:
+    if prep_dir.exists() and any(prep_dir.iterdir()):
+      raise ValueError(f"Prep output directory already exists and is not empty: {prep_dir}")
+  except OSError as exc:
+    raise ValueError(f"Unable to list prep output directory {prep_dir}: {exc}") from exc
+  return prep_dir
+
+
+def prepare_temp_output_dir(audio_dir: Path) -> Path:
+  """Create an empty staging directory for prep output."""
+
+  try:
+    return Path(tempfile.mkdtemp(prefix=".prep.", suffix=".tmp", dir=audio_dir))
+  except OSError as exc:
+    raise ValueError(f"Unable to create temporary prep output directory in {audio_dir}: {exc}") from exc
+
+
+def cleanup_temp_output_dir(prep_tmp_dir: Path) -> None:
+  """Remove a staged prep output directory if one exists."""
+
+  try:
+    if prep_tmp_dir.exists():
+      shutil.rmtree(prep_tmp_dir)
+  except OSError as exc:
+    raise ValueError(f"Unable to remove temporary prep output directory {prep_tmp_dir}: {exc}") from exc
+
+
+def finalize_output_dir(prep_tmp_dir: Path, prep_dir: Path) -> None:
+  """Move staged prep output into its final prep directory."""
+
+  try:
+    if prep_dir.exists():
+      prep_dir.rmdir()
+    prep_tmp_dir.rename(prep_dir)
+  except OSError as exc:
+    raise ValueError(f"Unable to move temporary prep output directory into place at {prep_dir}: {exc}") from exc
+
+
+def plan_segments(
+  audio_file: AudioInput,
+  *,
+  duration_seconds: float,
+  overlap_seconds: float,
+  output_dir: Path,
+) -> list[Segment]:
+  """Plan deterministic chunk windows and filenames for one source file."""
+
+  step = SEGMENT_DURATION_SECONDS - overlap_seconds
+  starts: list[float] = [0.0]
+  while starts[-1] + SEGMENT_DURATION_SECONDS < duration_seconds - TIMING_TOLERANCE_SECONDS:
+    starts.append(starts[-1] + step)
+  segments: list[Segment] = []
+  for index, start in enumerate(starts):
+    end = min(start + SEGMENT_DURATION_SECONDS, duration_seconds)
+    start_seconds = round(start, 3)
+    end_seconds = round(end, 3)
+    segment_duration_seconds = round(max(end_seconds - start_seconds, 0.0), 3)
+    if segment_duration_seconds <= 0:
+      continue
+    start_ms = seconds_to_milliseconds(start_seconds)
+    end_ms = seconds_to_milliseconds(end_seconds)
+    chunk_path = output_dir / f"{audio_file.stem}_{index:04d}_{start_ms:06d}_{end_ms:06d}.wav"
+    segments.append(
+      Segment(
+        source_path=audio_file.path,
+        source_file=audio_file.path.name,
+        source_stem=audio_file.stem,
+        chunk_path=chunk_path,
+        index=index,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        duration_seconds=segment_duration_seconds,
+      )
+    )
+  return segments
+
+
+def seconds_to_milliseconds(seconds: float) -> int:
+  """Convert rounded seconds into whole milliseconds for filenames."""
+
+  return round(seconds * 1000)
+
+
+def run_ffmpeg_segment(segment: Segment) -> None:
+  """Run ffmpeg for a single planned segment."""
+
+  command = [
+    "ffmpeg",
+    "-hide_banner",
+    "-nostdin",
+    "-y",
+    "-ss",
+    f"{segment.start_seconds:.3f}",
+    "-i",
+    str(segment.source_path),
+    "-t",
+    f"{segment.duration_seconds:.3f}",
+    "-vn",
+    "-acodec",
+    "pcm_s16le",
+    str(segment.chunk_path),
+  ]
+  try:
+    subprocess.run(command, check=True, capture_output=True, text=True)
+  except FileNotFoundError as exc:
+    raise ValueError("ffmpeg was not found; install it before running asr-prep") from exc
+  except subprocess.CalledProcessError as exc:
+    stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else str(exc.stderr)
+    raise ValueError(f"ffmpeg failed for {segment.source_file} chunk {segment.index}: {stderr}") from exc
+
+
+def write_manifest(
+  prep_dir: Path,
+  *,
+  sources: list[dict[str, Any]],
+  segments: list[Segment],
+  overlap_seconds: float,
+) -> None:
+  """Write the machine-readable prep manifest."""
+
+  manifest = {
+    "tool": "openai-tests asr-prep",
+    "segment_duration_seconds": SEGMENT_DURATION_SECONDS,
+    "overlap_seconds": overlap_seconds,
+    "sources": sources,
+    "chunks": [segment_to_manifest_row(segment) for segment in segments],
+  }
+  try:
+    (prep_dir / "manifest.json").write_text(
+      json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+      encoding="utf-8",
+    )
+  except OSError as exc:
+    raise ValueError(f"Unable to write prep manifest in {prep_dir}: {exc}") from exc
+
+
+def segment_to_manifest_row(segment: Segment) -> dict[str, Any]:
+  """Convert a planned segment into a manifest chunk row."""
+
+  row = asdict(segment)
+  row.pop("source_path")
+  row["chunk_file"] = segment.chunk_path.name
+  row.pop("chunk_path")
+  row["chunk_index"] = row.pop("index")
+  return row
+
+
+def write_report(
+  prep_dir: Path,
+  *,
+  sources: list[dict[str, Any]],
+  segments: list[Segment],
+  overlap_seconds: float,
+) -> None:
+  """Write a human-readable prep summary report."""
+
+  lines = [
+    "asr-prep report",
+    f"segment_duration_seconds: {SEGMENT_DURATION_SECONDS}",
+    f"overlap_seconds: {overlap_seconds}",
+    f"source_files: {len(sources)}",
+    f"chunks: {len(segments)}",
+    "",
+    "source_file\tchunk_file\tchunk_index\tstart_seconds\tend_seconds\tduration_seconds",
+  ]
+  lines.extend(
+    "\t".join(
+      (
+        segment.source_file,
+        segment.chunk_path.name,
+        str(segment.index),
+        f"{segment.start_seconds:.3f}",
+        f"{segment.end_seconds:.3f}",
+        f"{segment.duration_seconds:.3f}",
+      )
+    )
+    for segment in segments
+  )
+  try:
+    (prep_dir / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+  except OSError as exc:
+    raise ValueError(f"Unable to write prep report in {prep_dir}: {exc}") from exc
+
+
+def get_audio_duration_seconds(audio_path: Path) -> float:
+  """Read a positive finite audio duration with Mutagen."""
+
+  audio = mutagen.File(audio_path)
+  length = getattr(getattr(audio, "info", None), "length", None)
+  if isinstance(length, (int, float)) and not isinstance(length, bool) and math.isfinite(length) and length > 0:
+    return float(length)
+  raise ValueError(f"Unable to determine audio duration for {audio_path}")
+
+
+ASR_PREP_MODULE = EndpointTestModule(
+  name="asr-prep",
+  summary="Segment audio folders into deterministic chunks for prepared ASR WER runs.",
+  configure_parser=configure_parser,
+  handler=run,
+)

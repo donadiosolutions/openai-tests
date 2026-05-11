@@ -12,6 +12,8 @@ surfaces, runs those requests against a target base URL, and reports whether the
 - [text-simple module](text-simple.md): the text-generation compatibility check for `/v1/chat/completions` and `/v1/responses`.
 - [asr-simple module](asr-simple.md): the speech-recognition compatibility check for `/v1/chat/completions` and
   `/v1/audio/transcriptions`.
+- [asr-prep module](asr-prep.md): deterministic local segmentation for prepared ASR WER runs.
+- [asr-wer module](asr-wer.md): batch ASR ground-truth creation and WER evaluation, including prepared chunk stitching.
 - [list-models module](list-models.md): the models-listing compatibility check for `GET /v1/models`.
 - [Development and verification](development.md): module architecture, shared utilities, adding modules, required checks, and
   repository quality gates.
@@ -27,6 +29,14 @@ through both chat completions and audio transcriptions, verifies that enough
 expected words are present, reports WER, and warns when returned metadata
 suggests parameters changed in transit.
 
+`asr-prep` segments supported direct-child audio files into deterministic
+30-second WAV chunks under `AUDIO_DIR/prep`, writes a manifest and report, and
+refuses ambiguous source stems or non-empty prep output.
+
+`asr-wer` creates normalized ground transcripts and evaluates ASR output against
+them. Prepared runs read `AUDIO_DIR/prep/manifest.json`, transcribe chunks, and
+score one stitched transcript per original source file.
+
 `list-models` lists every available model through `GET /v1/models` and verifies the response shape against the official
 models-list schema.
 
@@ -37,6 +47,8 @@ models-list schema.
 - `src/openai_tests/core.py`: defines the `EndpointTestModule` interface.
 - `src/openai_tests/test_modules/text_simple.py`: implements `text-simple`.
 - `src/openai_tests/test_modules/asr_simple.py`: implements `asr-simple`.
+- `src/openai_tests/test_modules/asr_prep.py`: implements `asr-prep`.
+- `src/openai_tests/test_modules/asr_wer.py`: implements `asr-wer`.
 - `src/openai_tests/test_modules/list_models.py`: implements `list-models`.
 - `src/openai_tests/test_modules/_shared.py`: shared HTTP, JSON, output formatting, status, warning, and parsing helpers.
 - `tests/`: isolated unit tests for the CLI, module registry, shared behavior, and endpoint modules.
