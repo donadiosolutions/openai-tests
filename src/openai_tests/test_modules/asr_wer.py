@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import threading
@@ -54,6 +55,30 @@ class FileResult:
   wer_reference_words: int | None = None
   wer: float | None = None
   error_message: str | None = None
+  chunk_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedChunk:
+  """One chunk row from prep/manifest.json."""
+
+  audio: AudioInput
+  source: AudioInput
+  index: int
+  start_seconds: float
+  end_seconds: float
+  duration_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedSource:
+  """A source audio file and all manifest chunks that rebuild it."""
+
+  audio: AudioInput
+  chunks: tuple[PreparedChunk, ...]
+  duration_seconds: float
+  overlap_seconds: float
+  segment_duration_seconds: float
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -68,6 +93,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     help="Endpoint to use for transcription. Defaults to /v1/audio/transcriptions.",
   )
   parser.add_argument("--batch", type=int, default=1, help="Maximum concurrent in-flight requests. Defaults to 1.")
+  parser.add_argument(
+    "--prep", action="store_true", help="Use AUDIO_DIR/prep chunks and stitch results per source file."
+  )
+  parser.add_argument(
+    "--overlap", type=float, help="Expected prep overlap seconds; validated against prep/manifest.json."
+  )
   parser.add_argument(
     "--service-tier",
     choices=SERVICE_TIER_CHOICES,
@@ -91,7 +122,13 @@ def run(args: argparse.Namespace) -> int:
   try:
     validate_args(args)
     audio_dir = Path(args.audio_dir)
-    audio_files = discover_audio_files(audio_dir)
+    prepared_sources = resolve_prepared_audio_files(audio_dir, requested_overlap=args.overlap) if args.prep else None
+    if prepared_sources is not None:
+      args._prep_overlap_seconds = prepared_sources[0].overlap_seconds
+      args._prep_segment_duration_seconds = prepared_sources[0].segment_duration_seconds
+    audio_files = (
+      [source.audio for source in prepared_sources] if prepared_sources is not None else discover_audio_files(audio_dir)
+    )
     output_dir = resolve_output_dir(args, audio_dir)
     if args.mode == "eval":
       validate_eval_ground(audio_dir, audio_files)
@@ -104,13 +141,22 @@ def run(args: argparse.Namespace) -> int:
     return 2
 
   started_at = time.perf_counter()
-  results = process_audio_files(
-    args=args,
-    audio_files=audio_files,
-    output_dir=output_dir,
-    base_url=base_url,
-    api_key=api_key,
-  )
+  if prepared_sources is None:
+    results = process_audio_files(
+      args=args,
+      audio_files=audio_files,
+      output_dir=output_dir,
+      base_url=base_url,
+      api_key=api_key,
+    )
+  else:
+    results = process_prepared_sources(
+      args=args,
+      prepared_sources=prepared_sources,
+      output_dir=output_dir,
+      base_url=base_url,
+      api_key=api_key,
+    )
   wall_elapsed_seconds = max(time.perf_counter() - started_at, 0.0)
   write_report(
     args=args,
@@ -128,6 +174,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
   if args.batch < 1:
     raise ValueError("batch must be at least 1")
+  if args.overlap is not None and not args.prep:
+    raise ValueError("overlap can only be used with --prep")
   if args.prompt is not None and args.endpoint == "transcriptions" and args.transcriptions_prompt is not None:
     raise ValueError("prompt cannot be provided with transcriptions-prompt")
   if args.endpoint == "transcriptions" and has_explicit_completions_prompt_override(args):
@@ -232,6 +280,91 @@ def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
           f"Output artifact collision for {artifact_name!r}: {previous} and {audio_file.path.name} {kind}"
         )
       artifact_owner[artifact_key] = f"{audio_file.path.name} {kind}"
+
+
+def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | None) -> list[PreparedSource]:
+  """Load prep/manifest.json and return original source files grouped with chunks."""
+
+  manifest_path = audio_dir / "prep" / "manifest.json"
+  if not manifest_path.is_file():
+    raise ValueError(f"Prepared runs require {manifest_path}")
+  try:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise ValueError(f"Unable to read prepared manifest {manifest_path}: {exc}") from exc
+  if not isinstance(manifest, dict):
+    raise ValueError(f"Prepared manifest must be a JSON object: {manifest_path}")
+  overlap = require_manifest_number(manifest, "overlap_seconds")
+  segment_duration = require_manifest_number(manifest, "segment_duration_seconds")
+  if requested_overlap is not None and not math.isclose(requested_overlap, overlap, rel_tol=0.0, abs_tol=0.001):
+    raise ValueError(f"Requested overlap {requested_overlap} does not match manifest overlap {overlap}")
+  chunks_raw = manifest.get("chunks")
+  sources_raw = manifest.get("sources")
+  if not isinstance(chunks_raw, list) or not isinstance(sources_raw, list):
+    raise ValueError("Prepared manifest requires sources and chunks arrays")
+
+  source_durations: dict[str, float] = {}
+  for source_raw in sources_raw:
+    if not isinstance(source_raw, dict) or not isinstance(source_raw.get("source_file"), str):
+      raise ValueError("Prepared manifest source rows must include source_file")
+    source_durations[source_raw["source_file"]] = require_manifest_number(source_raw, "duration_seconds")
+
+  grouped: dict[str, list[PreparedChunk]] = {}
+  for chunk_raw in chunks_raw:
+    if not isinstance(chunk_raw, dict):
+      raise ValueError("Prepared manifest chunk rows must be objects")
+    source_file = require_manifest_string(chunk_raw, "source_file")
+    source_stem = require_manifest_string(chunk_raw, "source_stem")
+    chunk_file = require_manifest_string(chunk_raw, "chunk_file")
+    chunk_path = audio_dir / "prep" / chunk_file
+    if not chunk_path.is_file():
+      raise ValueError(f"Prepared chunk file does not exist: {chunk_path}")
+    source_path = audio_dir / source_file
+    source_audio = AudioInput(
+      path=source_path,
+      stem=source_stem,
+      format=source_path.suffix.lower().lstrip("."),
+    )
+    chunk_audio = AudioInput(path=chunk_path, stem=chunk_path.stem, format=chunk_path.suffix.lower().lstrip("."))
+    grouped.setdefault(source_file, []).append(
+      PreparedChunk(
+        audio=chunk_audio,
+        source=source_audio,
+        index=int(require_manifest_number(chunk_raw, "chunk_index")),
+        start_seconds=require_manifest_number(chunk_raw, "start_seconds"),
+        end_seconds=require_manifest_number(chunk_raw, "end_seconds"),
+        duration_seconds=require_manifest_number(chunk_raw, "duration_seconds"),
+      )
+    )
+
+  prepared_sources = [
+    PreparedSource(
+      audio=chunks[0].source,
+      chunks=tuple(sorted(chunks, key=lambda chunk: chunk.index)),
+      duration_seconds=source_durations.get(source_file, sum(chunk.duration_seconds for chunk in chunks)),
+      overlap_seconds=overlap,
+      segment_duration_seconds=segment_duration,
+    )
+    for source_file, chunks in sorted(grouped.items())
+  ]
+  if not prepared_sources:
+    raise ValueError("Prepared manifest does not contain any chunks")
+  validate_output_artifact_names([source.audio for source in prepared_sources])
+  return prepared_sources
+
+
+def require_manifest_string(row: dict[str, Any], key: str) -> str:
+  value = row.get(key)
+  if not isinstance(value, str) or not value:
+    raise ValueError(f"Prepared manifest row requires string {key}")
+  return value
+
+
+def require_manifest_number(row: dict[str, Any], key: str) -> float:
+  value = row.get(key)
+  if not isinstance(value, (int, float)) or isinstance(value, bool):
+    raise ValueError(f"Prepared manifest row requires numeric {key}")
+  return float(value)
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
@@ -348,6 +481,212 @@ def process_audio_files(
   return [results_by_name[audio_file.path.name] for audio_file in audio_files]
 
 
+def process_prepared_sources(
+  *,
+  args: argparse.Namespace,
+  prepared_sources: list[PreparedSource],
+  output_dir: Path,
+  base_url: str,
+  api_key: str | None,
+) -> list[FileResult]:
+  """Transcribe prepared chunks with shared concurrency and stitch by source."""
+
+  output_dir.joinpath("chunks").mkdir(parents=True, exist_ok=True)
+  results_by_source: dict[str, FileResult] = {}
+  all_chunks = [chunk for source in prepared_sources for chunk in source.chunks]
+  chunk_transcripts: dict[str, dict[int, str]] = {source.audio.path.name: {} for source in prepared_sources}
+  chunk_errors: dict[str, list[str]] = {source.audio.path.name: [] for source in prepared_sources}
+  started_by_source: dict[str, float] = {}
+
+  with tqdm(total=len(all_chunks), unit="chunk") as progress:
+    with ThreadPoolExecutor(max_workers=args.batch) as executor:
+      futures: dict[Future[str], PreparedChunk] = {}
+      for source in prepared_sources:
+        skipped_result = maybe_skip_prepared_ground_file(args, source, output_dir)
+        if skipped_result is not None:
+          results_by_source[source.audio.path.name] = skipped_result
+          progress.update(len(source.chunks))
+          tqdm.write(format_file_result(skipped_result, mode=args.mode))
+          continue
+        started_by_source[source.audio.path.name] = time.perf_counter()
+        for chunk in source.chunks:
+          futures[
+            executor.submit(
+              transcribe_with_selected_endpoint,
+              args=args,
+              audio_file=chunk.audio,
+              base_url=base_url,
+              api_key=api_key,
+            )
+          ] = chunk
+
+      for future in as_completed(futures):
+        chunk = futures[future]
+        try:
+          transcript = future.result()
+          chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
+          chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
+          atomic_write_text(chunk_output, transcript)
+        except Exception as exc:
+          chunk_errors[chunk.source.path.name].append(str(exc))
+        progress.update(1)
+
+  for source in prepared_sources:
+    if source.audio.path.name in results_by_source:
+      continue
+    started_at = started_by_source.get(source.audio.path.name, time.perf_counter())
+    elapsed = max(time.perf_counter() - started_at, 0.0)
+    results_by_source[source.audio.path.name] = build_prepared_source_result(
+      args=args,
+      source=source,
+      output_dir=output_dir,
+      chunk_transcripts=chunk_transcripts[source.audio.path.name],
+      chunk_errors=chunk_errors[source.audio.path.name],
+      elapsed_seconds=elapsed,
+    )
+    tqdm.write(format_file_result(results_by_source[source.audio.path.name], mode=args.mode))
+
+  return [results_by_source[source.audio.path.name] for source in prepared_sources]
+
+
+def maybe_skip_prepared_ground_file(
+  args: argparse.Namespace,
+  source: PreparedSource,
+  output_dir: Path,
+) -> FileResult | None:
+  """Skip prepared ground only when combined exact and normalized artifacts exist."""
+
+  exact_path = output_dir / f"{source.audio.stem}.txt"
+  normalized_path = output_dir / f"{source.audio.stem}_normalized.txt"
+  if args.mode != "ground" or not exact_path.is_file() or not normalized_path.is_file():
+    return None
+  try:
+    transcript = exact_path.read_text(encoding="utf-8")
+    normalized = normalized_path.read_text(encoding="utf-8")
+  except Exception as exc:
+    return build_failed_file_result(
+      audio_file=source.audio,
+      output_path=exact_path,
+      normalized_output_path=normalized_path,
+      elapsed_seconds=None,
+      error_message=str(exc),
+      chunk_count=len(source.chunks),
+    )
+  return FileResult(
+    audio=source.audio,
+    status="skipped",
+    transcript=transcript,
+    normalized_transcript=normalized,
+    output_path=exact_path,
+    normalized_output_path=normalized_path,
+    elapsed_seconds=None,
+    duration_seconds=source.duration_seconds,
+    rtfx=None,
+    exact_word_count=count_words(transcript),
+    normalized_word_count=count_words(normalized),
+    chunk_count=len(source.chunks),
+  )
+
+
+def build_prepared_source_result(
+  *,
+  args: argparse.Namespace,
+  source: PreparedSource,
+  output_dir: Path,
+  chunk_transcripts: dict[int, str],
+  chunk_errors: list[str],
+  elapsed_seconds: float,
+) -> FileResult:
+  exact_path = output_dir / f"{source.audio.stem}.txt"
+  normalized_path = output_dir / f"{source.audio.stem}_normalized.txt"
+  if chunk_errors or len(chunk_transcripts) != len(source.chunks):
+    missing = sorted({chunk.index for chunk in source.chunks} - set(chunk_transcripts))
+    errors = [*chunk_errors]
+    if missing:
+      errors.append(f"missing chunk transcripts: {', '.join(str(index) for index in missing)}")
+    result = build_failed_file_result(
+      audio_file=source.audio,
+      output_path=exact_path,
+      normalized_output_path=normalized_path,
+      elapsed_seconds=elapsed_seconds,
+      error_message="; ".join(errors),
+      duration_seconds=source.duration_seconds,
+      chunk_count=len(source.chunks),
+    )
+  else:
+    ordered_transcripts = [chunk_transcripts[chunk.index] for chunk in source.chunks]
+    transcript = "\n".join(ordered_transcripts)
+    normalized = stitch_normalized_transcripts(
+      [normalize_transcript(transcript) for transcript in ordered_transcripts],
+      overlap_seconds=source.overlap_seconds,
+    )
+    try:
+      atomic_write_text(exact_path, transcript)
+      atomic_write_text(normalized_path, normalized)
+      result = FileResult(
+        audio=source.audio,
+        status="transcribed",
+        transcript=transcript,
+        normalized_transcript=normalized,
+        output_path=exact_path,
+        normalized_output_path=normalized_path,
+        elapsed_seconds=elapsed_seconds,
+        duration_seconds=source.duration_seconds,
+        rtfx=source.duration_seconds / elapsed_seconds if elapsed_seconds > 0 else None,
+        exact_word_count=count_words(transcript),
+        normalized_word_count=count_words(normalized),
+        chunk_count=len(source.chunks),
+      )
+    except Exception as exc:
+      result = build_failed_file_result(
+        audio_file=source.audio,
+        output_path=exact_path,
+        normalized_output_path=normalized_path,
+        elapsed_seconds=elapsed_seconds,
+        error_message=str(exc),
+        duration_seconds=source.duration_seconds,
+        chunk_count=len(source.chunks),
+      )
+  if args.mode == "eval":
+    try:
+      return add_eval_scores(result, audio_file=source.audio)
+    except Exception as exc:
+      return FileResult(
+        audio=result.audio,
+        status="failed",
+        transcript=result.transcript,
+        normalized_transcript=result.normalized_transcript,
+        output_path=result.output_path,
+        normalized_output_path=result.normalized_output_path,
+        elapsed_seconds=result.elapsed_seconds,
+        duration_seconds=result.duration_seconds,
+        rtfx=result.rtfx,
+        exact_word_count=result.exact_word_count,
+        normalized_word_count=result.normalized_word_count,
+        error_message=str(exc),
+        chunk_count=result.chunk_count,
+      )
+  return result
+
+
+def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
+  stitched: list[str] = []
+  max_overlap_tokens = math.ceil(6 * overlap_seconds) + 6
+  for normalized in normalized_chunks:
+    words = normalized.split()
+    if not stitched:
+      stitched.extend(words)
+      continue
+    limit = min(max_overlap_tokens, len(stitched), len(words))
+    overlap = 0
+    for size in range(limit, 0, -1):
+      if stitched[-size:] == words[:size]:
+        overlap = size
+        break
+    stitched.extend(words[overlap:])
+  return " ".join(stitched)
+
+
 def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, output_dir: Path) -> FileResult | None:
   """Return an existing ground transcript result when reruns can skip a file."""
 
@@ -452,6 +791,7 @@ def transcribe_audio_file(
         exact_word_count=result.exact_word_count,
         normalized_word_count=result.normalized_word_count,
         error_message=str(exc),
+        chunk_count=result.chunk_count,
       )
   return result
 
@@ -475,6 +815,8 @@ def build_failed_file_result(
   normalized_output_path: Path,
   elapsed_seconds: float | None,
   error_message: str,
+  duration_seconds: float = 0.0,
+  chunk_count: int | None = None,
 ) -> FileResult:
   """Construct a standard failed result for pre-request per-file errors."""
 
@@ -486,11 +828,12 @@ def build_failed_file_result(
     output_path=output_path,
     normalized_output_path=normalized_output_path,
     elapsed_seconds=elapsed_seconds,
-    duration_seconds=0.0,
+    duration_seconds=duration_seconds,
     rtfx=None,
     exact_word_count=0,
     normalized_word_count=0,
     error_message=error_message,
+    chunk_count=chunk_count,
   )
 
 
@@ -599,6 +942,8 @@ def build_completions_request_args(args: argparse.Namespace) -> argparse.Namespa
     request_args.user_prompt = asr_simple.DEFAULT_USER_PROMPT
   if request_args.service_tier is not None:
     request_args.completions_service_tier = request_args.service_tier
+  if getattr(request_args, "prep", False) and request_args.completions_temperature is None:
+    request_args.completions_temperature = 0.0
   return request_args
 
 
@@ -610,6 +955,8 @@ def build_transcriptions_request_args(args: argparse.Namespace) -> argparse.Name
   request_args.model = None
   if request_args.prompt is not None:
     request_args.transcriptions_prompt = request_args.prompt
+  if getattr(request_args, "prep", False) and request_args.transcriptions_temperature is None:
+    request_args.transcriptions_temperature = 0.0
   return request_args
 
 
@@ -636,6 +983,7 @@ def add_eval_scores(result: FileResult, *, audio_file: AudioInput) -> FileResult
     wer_reference_words=reference_words,
     wer=wer,
     error_message=result.error_message,
+    chunk_count=result.chunk_count,
   )
 
 
@@ -788,7 +1136,12 @@ def write_report(
     f"model: {model}",
     f"batch_size: {args.batch}",
     f"service_tier: {resolve_report_service_tier(args)}",
+    f"temperature: {resolve_report_temperature(args)}",
     f"prompt_present: {has_report_prompt(args)}",
+    f"prepared_source: {str(bool(getattr(args, 'prep', False))).lower()}",
+    f"prep_folder: {Path(args.audio_dir) / 'prep' if getattr(args, 'prep', False) else 'none'}",
+    f"prep_overlap_seconds: {resolve_report_prep_overlap(args, results)}",
+    f"prep_segment_duration_seconds: {resolve_report_prep_segment_duration(args, results)}",
     f"output_folder: {output_dir}",
     f"total_files: {len(results)}",
     f"transcribed: {transcribed}",
@@ -822,6 +1175,32 @@ def resolve_report_service_tier(args: argparse.Namespace) -> str:
   return "none"
 
 
+def resolve_report_temperature(args: argparse.Namespace) -> str:
+  """Return the effective selected-endpoint temperature for report metadata."""
+
+  if args.endpoint == "completions":
+    if args.completions_temperature is not None:
+      return str(args.completions_temperature)
+    return "0.0" if getattr(args, "prep", False) else "provider_default"
+  if args.transcriptions_temperature is not None:
+    return str(args.transcriptions_temperature)
+  return "0.0" if getattr(args, "prep", False) else "provider_default"
+
+
+def resolve_report_prep_overlap(args: argparse.Namespace, results: list[FileResult]) -> str:
+  del results
+  if not getattr(args, "prep", False):
+    return "none"
+  return str(getattr(args, "_prep_overlap_seconds", args.overlap if args.overlap is not None else "unknown"))
+
+
+def resolve_report_prep_segment_duration(args: argparse.Namespace, results: list[FileResult]) -> str:
+  del results
+  if not getattr(args, "prep", False):
+    return "none"
+  return str(getattr(args, "_prep_segment_duration_seconds", 30.0))
+
+
 def has_report_prompt(args: argparse.Namespace) -> bool:
   """Return whether the run used an explicit prompt option."""
 
@@ -838,6 +1217,7 @@ def render_report_header(*, eval_mode: bool) -> str:
   columns = [
     "file",
     "status",
+    "chunk_count",
     "elapsed_seconds",
     "duration_seconds",
     "rtfx",
@@ -856,6 +1236,7 @@ def render_report_row(result: FileResult, *, eval_mode: bool) -> str:
   columns = [
     sanitize_output_field(result.audio.path.name),
     result.status,
+    "" if result.chunk_count is None else str(result.chunk_count),
     "" if result.elapsed_seconds is None else f"{result.elapsed_seconds:.2f}",
     f"{result.duration_seconds:.2f}",
     "" if result.rtfx is None else f"{result.rtfx:.2f}",

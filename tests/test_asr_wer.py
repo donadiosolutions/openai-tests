@@ -43,6 +43,9 @@ def test_parser_accepts_batch_endpoint_prompt_service_tier_and_endpoint_options(
     "0.2",
     "--transcriptions-language",
     "en",
+    "--prep",
+    "--overlap",
+    "3.5",
   )
 
   assert args.mode == "eval"
@@ -53,11 +56,16 @@ def test_parser_accepts_batch_endpoint_prompt_service_tier_and_endpoint_options(
   assert args.service_tier == "priority"
   assert args.completions_temperature == 0.2
   assert args.transcriptions_language == "en"
+  assert args.prep is True
+  assert args.overlap == 3.5
 
 
 def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match="batch must be at least 1"):
     asr_wer.validate_args(build_args("ground", str(tmp_path), "--batch", "0"))
+
+  with pytest.raises(ValueError, match="overlap can only be used"):
+    asr_wer.validate_args(build_args("ground", str(tmp_path), "--overlap", "3"))
 
   missing_dir = tmp_path / "missing"
   with pytest.raises(ValueError, match="Audio directory does not exist"):
@@ -432,6 +440,8 @@ def test_report_records_endpoint_specific_prompt_and_service_tier(tmp_path: Path
   )
   transcriptions_report = (transcriptions_dir / "report.txt").read_text(encoding="utf-8")
   assert "prompt_present: True" in transcriptions_report
+  assert "temperature: provider_default" in transcriptions_report
+  assert "prepared_source: false" in transcriptions_report
 
   completions_dir = tmp_path / "completions"
   completions_dir.mkdir()
@@ -454,6 +464,7 @@ def test_report_records_endpoint_specific_prompt_and_service_tier(tmp_path: Path
   completions_report = (completions_dir / "report.txt").read_text(encoding="utf-8")
   assert "service_tier: scale" in completions_report
   assert "prompt_present: True" in completions_report
+  assert "temperature: provider_default" in completions_report
 
 
 def test_default_transcriptions_payload_uses_asr_model(
@@ -921,6 +932,401 @@ def test_batch_limits_concurrent_transcriptions(
 
   assert asr_wer.run(build_args("ground", str(audio_dir), "--batch", "2")) == 0
   assert max_active <= 2
+
+
+def write_prep_manifest(audio_dir: Path, *, overlap: float = 3.0) -> None:
+  prep_dir = audio_dir / "prep"
+  prep_dir.mkdir()
+  for name in ("call_0000_000000_030000.wav", "call_0001_027000_050000.wav"):
+    write_audio(prep_dir / name)
+  manifest = {
+    "tool": "openai-tests asr-prep",
+    "segment_duration_seconds": 30.0,
+    "overlap_seconds": overlap,
+    "sources": [{"source_file": "call.wav", "duration_seconds": 50.0, "chunk_count": 2}],
+    "chunks": [
+      {
+        "source_file": "call.wav",
+        "source_stem": "call",
+        "chunk_file": "call_0000_000000_030000.wav",
+        "chunk_index": 0,
+        "start_seconds": 0.0,
+        "end_seconds": 30.0,
+        "duration_seconds": 30.0,
+      },
+      {
+        "source_file": "call.wav",
+        "source_stem": "call",
+        "chunk_file": "call_0001_027000_050000.wav",
+        "chunk_index": 1,
+        "start_seconds": 27.0,
+        "end_seconds": 50.0,
+        "duration_seconds": 23.0,
+      },
+    ],
+  }
+  (prep_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_prepared_mode_requires_manifest_and_validates_overlap(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+
+  with pytest.raises(ValueError, match=r"prep/manifest\.json"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  write_prep_manifest(audio_dir, overlap=3.0)
+  with pytest.raises(ValueError, match="does not match manifest"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=2.0)
+
+
+def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  prep_dir = audio_dir / "prep"
+  prep_dir.mkdir(parents=True)
+  manifest_path = prep_dir / "manifest.json"
+
+  manifest_path.write_text("{", encoding="utf-8")
+  with pytest.raises(ValueError, match="Unable to read prepared manifest"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text("[]", encoding="utf-8")
+  with pytest.raises(ValueError, match="must be a JSON object"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(json.dumps({"overlap_seconds": 3.0, "segment_duration_seconds": 30.0}), encoding="utf-8")
+  with pytest.raises(ValueError, match="requires sources and chunks arrays"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps({"overlap_seconds": 3.0, "segment_duration_seconds": 30.0, "sources": [{}], "chunks": []}),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="source rows must include source_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps(
+      {
+        "overlap_seconds": 3.0,
+        "segment_duration_seconds": 30.0,
+        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+        "chunks": ["bad"],
+      }
+    ),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="chunk rows must be objects"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps(
+      {
+        "overlap_seconds": 3.0,
+        "segment_duration_seconds": 30.0,
+        "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+        "chunks": [
+          {
+            "source_file": "call.wav",
+            "source_stem": "call",
+            "chunk_file": "missing.wav",
+            "chunk_index": 0,
+            "start_seconds": 0.0,
+            "end_seconds": 1.0,
+            "duration_seconds": 1.0,
+          }
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="Prepared chunk file does not exist"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps({"overlap_seconds": True, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="numeric overlap_seconds"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  manifest_path.write_text(
+    json.dumps({"overlap_seconds": 3.0, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
+    encoding="utf-8",
+  )
+  with pytest.raises(ValueError, match="does not contain any chunks"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  with pytest.raises(ValueError, match="string source_file"):
+    asr_wer.require_manifest_string({}, "source_file")
+  with pytest.raises(ValueError, match="numeric duration_seconds"):
+    asr_wer.require_manifest_number({"duration_seconds": "1"}, "duration_seconds")
+
+
+def test_prepared_ground_reads_chunks_and_writes_combined_root_artifacts(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  seen_files: list[str] = []
+  transcripts = iter(["Alpha Bravo repeated", "repeated Charlie"])
+
+  def fake_transcribe(**kwargs: object) -> str:
+    audio_file = kwargs["audio_file"]
+    assert isinstance(audio_file, asr_wer.AudioInput)
+    seen_files.append(audio_file.path.name)
+    return next(transcripts)
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", fake_transcribe)
+
+  assert asr_wer.run(build_args("ground", str(audio_dir), "--prep")) == 0
+
+  assert seen_files == ["call_0000_000000_030000.wav", "call_0001_027000_050000.wav"]
+  ground_dir = audio_dir / "ground"
+  assert (ground_dir / "call.txt").read_text(encoding="utf-8") == "Alpha Bravo repeated\nrepeated Charlie"
+  assert (ground_dir / "call_normalized.txt").read_text(encoding="utf-8") == "alpha bravo repeated charlie"
+  assert (ground_dir / "chunks" / "call_0000_000000_030000.txt").read_text(encoding="utf-8") == "Alpha Bravo repeated"
+  report = (ground_dir / "report.txt").read_text(encoding="utf-8")
+  assert "temperature: 0.0" in report
+  assert "prepared_source: true" in report
+  assert "prep_folder:" in report
+  assert "\tchunk_count\t" in report
+  assert "call.wav\ttranscribed" in report
+
+
+def test_prepared_eval_requires_combined_ground_and_honors_batch(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+
+  assert asr_wer.run(build_args("eval", str(audio_dir), "--prep")) == 2
+
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "call.txt").write_text("Alpha bravo charlie", encoding="utf-8")
+  (ground_dir / "call_normalized.txt").write_text("alpha bravo charlie", encoding="utf-8")
+  active = 0
+  max_active = 0
+  lock = threading.Lock()
+
+  def fake_transcribe(**kwargs: object) -> str:
+    nonlocal active, max_active
+    with lock:
+      active += 1
+      max_active = max(max_active, active)
+    time.sleep(0.02)
+    with lock:
+      active -= 1
+    audio_file = kwargs["audio_file"]
+    assert isinstance(audio_file, asr_wer.AudioInput)
+    return "Alpha bravo" if audio_file.path.name.endswith("030000.wav") else "charlie"
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", fake_transcribe)
+  monkeypatch.setattr(asr_wer.time, "time", lambda: 1234)
+
+  assert asr_wer.run(build_args("eval", str(audio_dir), "--prep", "--batch", "2")) == 0
+  assert max_active == 2
+  output_dir = audio_dir / f"{asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL}_1234"
+  assert (output_dir / "call_normalized.txt").read_text(encoding="utf-8") == "alpha bravo charlie"
+  report = (output_dir / "report.txt").read_text(encoding="utf-8")
+  assert "prepared_source: true" in report
+  assert "0.00%" in report
+
+
+def test_prepared_temperature_defaults_only_selected_endpoint(tmp_path: Path) -> None:
+  assert (
+    asr_wer.build_transcriptions_request_args(build_args("ground", str(tmp_path), "--prep")).transcriptions_temperature
+    == 0.0
+  )
+  assert (
+    asr_wer.build_transcriptions_request_args(
+      build_args("ground", str(tmp_path), "--prep", "--transcriptions-temperature", "0.4")
+    ).transcriptions_temperature
+    == 0.4
+  )
+  assert (
+    asr_wer.build_completions_request_args(
+      build_args("ground", str(tmp_path), "--prep", "--endpoint", "completions")
+    ).completions_temperature
+    == 0.0
+  )
+  assert (
+    asr_wer.build_completions_request_args(
+      build_args("ground", str(tmp_path), "--prep", "--endpoint", "completions", "--completions-temperature", "0.2")
+    ).completions_temperature
+    == 0.2
+  )
+
+
+def test_prepared_failed_chunk_fails_parent_original(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+
+  def fake_transcribe(**kwargs: object) -> str:
+    audio_file = kwargs["audio_file"]
+    assert isinstance(audio_file, asr_wer.AudioInput)
+    if audio_file.path.name.endswith("050000.wav"):
+      raise ValueError("provider failed")
+    return "Alpha"
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", fake_transcribe)
+
+  assert asr_wer.run(build_args("ground", str(audio_dir), "--prep")) == 1
+  report = (audio_dir / "ground" / "report.txt").read_text(encoding="utf-8")
+  assert "call.wav\tfailed" in report
+  assert "provider failed" in report
+
+
+def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  sources = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+  (output_dir / "call.txt").write_text("Alpha", encoding="utf-8")
+  (output_dir / "call_normalized.txt").write_text("alpha", encoding="utf-8")
+
+  skipped = asr_wer.maybe_skip_prepared_ground_file(
+    build_args("ground", str(audio_dir), "--prep"), sources[0], output_dir
+  )
+  assert skipped is not None
+  assert skipped.status == "skipped"
+  assert skipped.chunk_count == 2
+
+  (output_dir / "call.txt").write_bytes(b"\xff")
+  failed_skip = asr_wer.maybe_skip_prepared_ground_file(
+    build_args("ground", str(audio_dir), "--prep"), sources[0], output_dir
+  )
+  assert failed_skip is not None
+  assert failed_skip.status == "failed"
+
+  missing_chunk_result = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=sources[0],
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert missing_chunk_result.status == "failed"
+  assert "missing chunk transcripts" in str(missing_chunk_result.error_message)
+
+  def fail_write(path: Path, text: str) -> None:
+    raise OSError("disk full")
+
+  monkeypatch.setattr(asr_wer, "atomic_write_text", fail_write)
+  write_failed = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=sources[0],
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha", 1: "Bravo"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert write_failed.status == "failed"
+  assert write_failed.error_message == "disk full"
+
+
+def test_process_prepared_sources_uses_existing_combined_ground(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  source = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)[0]
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+  (output_dir / "call.txt").write_text("Alpha", encoding="utf-8")
+  (output_dir / "call_normalized.txt").write_text("alpha", encoding="utf-8")
+
+  def fail_transcribe(**_: object) -> str:
+    raise AssertionError("prepared ground skip should not send chunk requests")
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", fail_transcribe)
+  results = asr_wer.process_prepared_sources(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    prepared_sources=[source],
+    output_dir=output_dir,
+    base_url="https://example.com",
+    api_key=None,
+  )
+
+  assert [result.status for result in results] == ["skipped"]
+
+
+def test_prepared_chunk_error_without_missing_chunks(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  source = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)[0]
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+
+  result = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=source,
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha", 1: "Bravo"},
+    chunk_errors=["provider failed"],
+    elapsed_seconds=1.0,
+  )
+
+  assert result.status == "failed"
+  assert result.error_message == "provider failed"
+
+
+def test_prepared_eval_ground_read_failure_and_report_temperature(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  source = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)[0]
+  output_dir = audio_dir / "eval"
+  output_dir.mkdir()
+  ground_dir = audio_dir / "ground"
+  ground_dir.mkdir()
+  (ground_dir / "call_normalized.txt").write_bytes(b"\xff")
+
+  result = asr_wer.build_prepared_source_result(
+    args=build_args("eval", str(audio_dir), "--prep"),
+    source=source,
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha", 1: "Bravo"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert result.status == "failed"
+  assert result.error_message is not None
+  assert "decode" in result.error_message
+
+  assert (
+    asr_wer.resolve_report_temperature(
+      build_args("ground", str(audio_dir), "--endpoint", "completions", "--completions-temperature", "0.7")
+    )
+    == "0.7"
+  )
+  assert (
+    asr_wer.resolve_report_temperature(build_args("ground", str(audio_dir), "--transcriptions-temperature", "0.6"))
+    == "0.6"
+  )
 
 
 def test_transcribe_audio_file_records_failures_and_eval_scores(

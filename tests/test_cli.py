@@ -20,6 +20,7 @@ def test_main_prints_help_without_a_subcommand(capsys: pytest.CaptureFixture[str
   captured = capsys.readouterr()
   assert "usage:" in captured.out
   assert "modules" in captured.out
+  assert "asr-prep" in captured.out
   assert "asr-simple" in captured.out
   assert "asr-wer" in captured.out
   assert "list-models" in captured.out
@@ -29,6 +30,7 @@ def test_main_prints_help_without_a_subcommand(capsys: pytest.CaptureFixture[str
 def test_main_lists_registered_modules(capsys: pytest.CaptureFixture[str]) -> None:
   assert main(["modules"]) == 0
   captured = capsys.readouterr()
+  assert "asr-prep" in captured.out
   assert "asr-simple" in captured.out
   assert "asr-wer" in captured.out
   assert "list-models" in captured.out
@@ -45,6 +47,12 @@ def test_parser_accepts_asr_simple_command() -> None:
   parser = build_parser()
   parsed = parser.parse_args(["asr-simple"])
   assert parsed.command == "asr-simple"
+
+
+def test_parser_accepts_asr_prep_command(tmp_path: Path) -> None:
+  parser = build_parser()
+  parsed = parser.parse_args(["asr-prep", str(tmp_path)])
+  assert parsed.command == "asr-prep"
 
 
 def test_parser_accepts_asr_wer_command(tmp_path: Path) -> None:
