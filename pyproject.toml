@@ -16,7 +16,10 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+  "mutagen==1.47.0",
+  "tqdm==4.67.3",
+]
 
 [project.urls]
 Homepage = "https://github.com/donadiosolutions/openai-tests"

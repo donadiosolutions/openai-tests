@@ -141,6 +141,19 @@ DEFAULT_BUNDLED_AUDIO_SAMPLES = (
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
+  add_connection_arguments(parser)
+  add_audio_fixture_arguments(parser)
+  add_prompt_arguments(
+    parser,
+    system_default=DEFAULT_SYSTEM_PROMPT,
+    developer_default=DEFAULT_DEVELOPER_PROMPT,
+    user_default=DEFAULT_USER_PROMPT,
+  )
+  add_completions_arguments(parser)
+  add_transcriptions_arguments(parser)
+
+
+def add_connection_arguments(parser: argparse.ArgumentParser) -> None:
   parser.add_argument(
     "--base-url",
     help="Base URL for the OpenAI-compatible API. Defaults to $OPENAI_BASE_URL or OpenAI's public API.",
@@ -177,6 +190,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     help="Show the full HTTP requests and responses for both endpoints.",
   )
 
+
+def add_audio_fixture_arguments(parser: argparse.ArgumentParser) -> None:
   audio = parser.add_argument_group("Audio fixture")
   audio.add_argument("--audio-file", help="Use an existing audio file instead of synthesizing one with espeak-ng.")
   audio.add_argument(
@@ -198,11 +213,21 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
   audio.add_argument("--espeak-voice", default=DEFAULT_ESPEAK_VOICE)
   audio.add_argument("--espeak-speed", type=int, default=DEFAULT_ESPEAK_SPEED)
 
-  prompts = parser.add_argument_group("Prompt text")
-  prompts.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
-  prompts.add_argument("--developer-prompt", default=DEFAULT_DEVELOPER_PROMPT)
-  prompts.add_argument("--user-prompt", default=DEFAULT_USER_PROMPT)
 
+def add_prompt_arguments(
+  parser: argparse.ArgumentParser,
+  *,
+  system_default: str | None,
+  developer_default: str | None,
+  user_default: str | None,
+) -> None:
+  prompts = parser.add_argument_group("Prompt text")
+  prompts.add_argument("--system-prompt", default=system_default)
+  prompts.add_argument("--developer-prompt", default=developer_default)
+  prompts.add_argument("--user-prompt", default=user_default)
+
+
+def add_completions_arguments(parser: argparse.ArgumentParser) -> None:
   completions = parser.add_argument_group("Chat completions API parameters")
   completions.add_argument("--completions-audio-json")
   completions.add_argument("--completions-frequency-penalty", type=float)
@@ -250,6 +275,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
   completions.add_argument("--completions-user")
   completions.add_argument("--completions-web-search-options-json")
 
+
+def add_transcriptions_arguments(parser: argparse.ArgumentParser) -> None:
   transcriptions = parser.add_argument_group("Transcriptions API parameters")
   transcriptions.add_argument("--transcriptions-chunking-strategy")
   transcriptions.add_argument("--transcriptions-chunking-strategy-json")
