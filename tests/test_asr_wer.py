@@ -976,6 +976,13 @@ def test_prepared_mode_requires_manifest_and_validates_overlap(tmp_path: Path) -
   with pytest.raises(ValueError, match=r"prep/manifest\.json"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  prep_target = tmp_path / "prep-target"
+  prep_target.mkdir()
+  (audio_dir / "prep").symlink_to(prep_target, target_is_directory=True)
+  with pytest.raises(ValueError, match="prep directory must not be a symlink"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+  (audio_dir / "prep").unlink()
+
   write_prep_manifest(audio_dir, overlap=3.0)
   with pytest.raises(ValueError, match="does not match manifest"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=2.0)
@@ -986,6 +993,13 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   prep_dir = audio_dir / "prep"
   prep_dir.mkdir(parents=True)
   manifest_path = prep_dir / "manifest.json"
+
+  outside_manifest = tmp_path / "manifest.json"
+  outside_manifest.write_text("{}", encoding="utf-8")
+  manifest_path.symlink_to(outside_manifest)
+  with pytest.raises(ValueError, match="manifest must not be a symlink"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+  manifest_path.unlink()
 
   manifest_path.write_text("{", encoding="utf-8")
   with pytest.raises(ValueError, match="Unable to read prepared manifest"):
@@ -1601,6 +1615,15 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
     elapsed_seconds=1.0,
   )
   assert source_level_normalized.normalized_transcript == "21 pilots"
+  normalized_overlap = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=sources[0],
+    output_dir=output_dir,
+    chunk_transcripts={0: "Alpha repeated,", 1: "REPEATED Bravo"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert normalized_overlap.normalized_transcript == "alpha repeated bravo"
   assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=0.0) == (
     "alpha repeated repeated bravo"
   )

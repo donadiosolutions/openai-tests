@@ -96,6 +96,14 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   assert "already exists and is not empty" in capsys.readouterr().err
 
   (prep_dir / "old.wav").unlink()
+  prep_dir.rmdir()
+
+  symlink_target = tmp_path / "prep-target"
+  symlink_target.mkdir()
+  prep_dir.symlink_to(symlink_target, target_is_directory=True)
+  assert asr_prep.run(build_args(str(audio_dir))) == 2
+  assert "Prep output path must not be a symlink" in capsys.readouterr().err
+  prep_dir.unlink()
 
   def missing_ffmpeg(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
     """Simulate an environment without ffmpeg on PATH."""

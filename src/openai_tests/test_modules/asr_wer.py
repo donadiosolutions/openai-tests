@@ -287,7 +287,12 @@ def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
 def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | None) -> list[PreparedSource]:
   """Load prep/manifest.json and return original source files grouped with chunks."""
 
-  manifest_path = audio_dir / "prep" / "manifest.json"
+  prep_dir = audio_dir / "prep"
+  if prep_dir.is_symlink():
+    raise ValueError(f"Prepared prep directory must not be a symlink: {prep_dir}")
+  manifest_path = prep_dir / "manifest.json"
+  if manifest_path.is_symlink():
+    raise ValueError(f"Prepared manifest must not be a symlink: {manifest_path}")
   if not manifest_path.is_file():
     raise ValueError(f"Prepared runs require {manifest_path}")
   try:
@@ -915,9 +920,7 @@ def build_prepared_source_result(
   else:
     ordered_transcripts = [chunk_transcripts[chunk.index] for chunk in source.chunks]
     transcript = "\n".join(ordered_transcripts)
-    normalized = normalize_transcript(
-      stitch_exact_transcripts(ordered_transcripts, overlap_seconds=source.overlap_seconds)
-    )
+    normalized = normalize_prepared_transcripts(ordered_transcripts, overlap_seconds=source.overlap_seconds)
     try:
       atomic_write_text(exact_path, transcript)
       atomic_write_text(normalized_path, normalized)
@@ -992,6 +995,18 @@ def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_secon
   """Stitch already-normalized chunks and remove exact repeated boundary tokens."""
 
   return stitch_exact_transcripts(normalized_chunks, overlap_seconds=overlap_seconds)
+
+
+def normalize_prepared_transcripts(chunks: list[str], *, overlap_seconds: float) -> str:
+  """Normalize prepared chunks while preserving source-level context when possible."""
+
+  normalized_chunks = [normalize_transcript(chunk) for chunk in chunks]
+  normalized_concatenated = " ".join(chunk for chunk in normalized_chunks if chunk)
+  normalized_stitched = stitch_normalized_transcripts(normalized_chunks, overlap_seconds=overlap_seconds)
+  if len(normalized_stitched.split()) < len(normalized_concatenated.split()):
+    return normalized_stitched
+  exact_stitched = stitch_exact_transcripts(chunks, overlap_seconds=overlap_seconds)
+  return normalize_transcript(exact_stitched)
 
 
 def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, output_dir: Path) -> FileResult | None:

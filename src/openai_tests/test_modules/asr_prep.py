@@ -202,6 +202,8 @@ def prepare_output_dir(audio_dir: Path) -> Path:
   """Validate the final prep output directory before staging work."""
 
   prep_dir = audio_dir / "prep"
+  if prep_dir.is_symlink():
+    raise ValueError(f"Prep output path must not be a symlink: {prep_dir}")
   if prep_dir.exists() and not prep_dir.is_dir():
     raise ValueError(f"Prep output path is not a directory: {prep_dir}")
   try:
