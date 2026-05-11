@@ -118,6 +118,8 @@ def validate_audio_inputs(audio_files: list[AudioInput]) -> None:
 
   stems: dict[str, Path] = {}
   for audio_file in audio_files:
+    validate_plain_filename(audio_file.path.name, "source filename")
+    validate_plain_filename(audio_file.stem, "source filename stem")
     stem_key = audio_file.stem.casefold()
     if stem_key in stems:
       raise ValueError(
@@ -125,6 +127,23 @@ def validate_audio_inputs(audio_files: list[AudioInput]) -> None:
       )
     stems[stem_key] = audio_file.path
   validate_output_artifact_names(audio_files)
+
+
+def validate_plain_filename(value: str, kind: str) -> None:
+  if (
+    not value
+    or Path(value).is_absolute()
+    or Path(value).anchor
+    or ":" in value
+    or "/" in value
+    or "\\" in value
+    or value
+    in {
+      ".",
+      "..",
+    }
+  ):
+    raise ValueError(f"Audio input {kind} must be a plain filename")
 
 
 def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
@@ -291,7 +310,7 @@ def write_report(
 def get_audio_duration_seconds(audio_path: Path) -> float:
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
-  if isinstance(length, (int, float)) and not isinstance(length, bool) and length > 0:
+  if isinstance(length, (int, float)) and not isinstance(length, bool) and math.isfinite(length) and length > 0:
     return float(length)
   raise ValueError(f"Unable to determine audio duration for {audio_path}")
 

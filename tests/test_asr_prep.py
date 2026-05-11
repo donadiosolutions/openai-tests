@@ -199,6 +199,24 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
   with pytest.raises(ValueError, match="Unable to determine audio duration"):
     asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
 
+  class InfiniteInfo:
+    length = float("inf")
+
+  class InfiniteAudio:
+    info = InfiniteInfo()
+
+  monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: InfiniteAudio())
+  with pytest.raises(ValueError, match="Unable to determine audio duration"):
+    asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
+
+
+def test_validate_audio_inputs_rejects_names_that_prepared_wer_cannot_reload() -> None:
+  with pytest.raises(ValueError, match="plain filename"):
+    asr_prep.validate_audio_inputs([asr_prep.AudioInput(path=Path("bad\\name.wav"), stem="bad\\name", format="wav")])
+
+  with pytest.raises(ValueError, match="source filename stem"):
+    asr_prep.validate_audio_inputs([asr_prep.AudioInput(path=Path("..wav"), stem=".", format="wav")])
+
 
 def test_segment_planning_uses_stable_30_second_chunks_and_direct_children(tmp_path: Path) -> None:
   audio_dir = tmp_path / "audio"

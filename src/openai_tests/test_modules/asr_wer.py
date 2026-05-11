@@ -315,11 +315,15 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     if not isinstance(source_raw, dict) or not isinstance(source_raw.get("source_file"), str):
       raise ValueError("Prepared manifest source rows must include source_file")
     source_file = require_manifest_filename(source_raw, "source_file")
-    source_durations[source_file] = require_manifest_number(source_raw, "duration_seconds")
+    source_duration = require_manifest_number(source_raw, "duration_seconds")
+    if source_duration <= 0:
+      raise ValueError(f"Prepared manifest source duration_seconds for {source_file} must be greater than 0")
+    source_durations[source_file] = source_duration
     source_chunk_counts[source_file] = require_manifest_integer(source_raw, "chunk_count")
 
   grouped: dict[str, list[PreparedChunk]] = {}
   seen_chunk_indices: dict[str, set[int]] = {}
+  seen_chunk_files: set[str] = set()
   for chunk_raw in chunks_raw:
     if not isinstance(chunk_raw, dict):
       raise ValueError("Prepared manifest chunk rows must be objects")
@@ -328,6 +332,9 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     if source_stem != Path(source_file).stem:
       raise ValueError(f"Prepared manifest source_stem {source_stem!r} does not match source_file {source_file!r}")
     chunk_file = require_manifest_filename(chunk_raw, "chunk_file")
+    if chunk_file in seen_chunk_files:
+      raise ValueError(f"Prepared manifest duplicate chunk_file {chunk_file}")
+    seen_chunk_files.add(chunk_file)
     chunk_path = audio_dir / "prep" / chunk_file
     if not chunk_path.is_file():
       raise ValueError(f"Prepared chunk file does not exist: {chunk_path}")
@@ -343,6 +350,9 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
     if chunk_index in source_indices:
       raise ValueError(f"Prepared manifest duplicate chunk_index {chunk_index} for {source_file}")
     source_indices.add(chunk_index)
+    chunk_duration = require_manifest_number(chunk_raw, "duration_seconds")
+    if chunk_duration <= 0:
+      raise ValueError(f"Prepared manifest chunk duration_seconds for {chunk_file} must be greater than 0")
     grouped.setdefault(source_file, []).append(
       PreparedChunk(
         audio=chunk_audio,
@@ -350,7 +360,7 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
         index=chunk_index,
         start_seconds=require_manifest_number(chunk_raw, "start_seconds"),
         end_seconds=require_manifest_number(chunk_raw, "end_seconds"),
-        duration_seconds=require_manifest_number(chunk_raw, "duration_seconds"),
+        duration_seconds=chunk_duration,
       )
     )
 
@@ -371,6 +381,13 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
       raise ValueError(
         f"Prepared manifest chunk_count for {source_file} is {expected_chunk_count}, "
         f"but {actual_chunk_count} chunk rows were found"
+      )
+    expected_indices = set(range(expected_chunk_count))
+    actual_indices = {chunk.index for chunk in grouped[source_file]}
+    if actual_indices != expected_indices:
+      raise ValueError(
+        f"Prepared manifest chunk_index values for {source_file} must be contiguous from "
+        f"0 to {expected_chunk_count - 1}"
       )
 
   prepared_sources = [
