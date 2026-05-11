@@ -16,6 +16,11 @@ def test_parser_defaults_to_no_command() -> None:
 
 
 def test_main_prints_help_without_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+  """
+  Verify that calling main() with no subcommand prints the CLI help and lists the registered commands.
+  
+  Asserts that exit code is 0 and the captured stdout contains the usage header and the expected command names: "modules", "asr-prep", "asr-simple", "asr-wer", "list-models", and "text-simple".
+  """
   assert main([]) == 0
   captured = capsys.readouterr()
   assert "usage:" in captured.out
