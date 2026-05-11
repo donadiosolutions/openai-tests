@@ -1044,6 +1044,59 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   with pytest.raises(ValueError, match="Prepared chunk file does not exist"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  write_audio(prep_dir / "call_0000_000000_001000.wav")
+  unsafe_base = {
+    "overlap_seconds": 3.0,
+    "segment_duration_seconds": 30.0,
+    "sources": [{"source_file": "call.wav", "duration_seconds": 1.0}],
+    "chunks": [
+      {
+        "source_file": "call.wav",
+        "source_stem": "call",
+        "chunk_file": "call_0000_000000_001000.wav",
+        "chunk_index": 0,
+        "start_seconds": 0.0,
+        "end_seconds": 1.0,
+        "duration_seconds": 1.0,
+      }
+    ],
+  }
+  unsafe_source = dict(unsafe_base)
+  unsafe_source["sources"] = [{"source_file": "../call.wav", "duration_seconds": 1.0}]
+  manifest_path.write_text(json.dumps(unsafe_source), encoding="utf-8")
+  with pytest.raises(ValueError, match="plain filename source_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  unsafe_chunk_source = dict(unsafe_base)
+  unsafe_chunk_source["chunks"] = [{**unsafe_base["chunks"][0], "source_file": "/tmp/call.wav"}]
+  manifest_path.write_text(json.dumps(unsafe_chunk_source), encoding="utf-8")
+  with pytest.raises(ValueError, match="plain filename source_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  unsafe_chunk_file = dict(unsafe_base)
+  unsafe_chunk_file["chunks"] = [{**unsafe_base["chunks"][0], "chunk_file": "../secret.wav"}]
+  manifest_path.write_text(json.dumps(unsafe_chunk_file), encoding="utf-8")
+  with pytest.raises(ValueError, match="plain filename chunk_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  unsafe_stem = dict(unsafe_base)
+  unsafe_stem["chunks"] = [{**unsafe_base["chunks"][0], "source_stem": "../call"}]
+  manifest_path.write_text(json.dumps(unsafe_stem), encoding="utf-8")
+  with pytest.raises(ValueError, match="plain filename stem source_stem"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  mismatched_stem = dict(unsafe_base)
+  mismatched_stem["chunks"] = [{**unsafe_base["chunks"][0], "source_stem": "other"}]
+  manifest_path.write_text(json.dumps(mismatched_stem), encoding="utf-8")
+  with pytest.raises(ValueError, match="does not match source_file"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  fractional_index = dict(unsafe_base)
+  fractional_index["chunks"] = [{**unsafe_base["chunks"][0], "chunk_index": 1.9}]
+  manifest_path.write_text(json.dumps(fractional_index), encoding="utf-8")
+  with pytest.raises(ValueError, match="integer chunk_index"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   manifest_path.write_text(
     json.dumps({"overlap_seconds": True, "segment_duration_seconds": 30.0, "sources": [], "chunks": []}),
     encoding="utf-8",
@@ -1060,8 +1113,14 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
 
   with pytest.raises(ValueError, match="string source_file"):
     asr_wer.require_manifest_string({}, "source_file")
+  with pytest.raises(ValueError, match="plain filename source_file"):
+    asr_wer.require_manifest_filename({"source_file": "nested/call.wav"}, "source_file")
+  with pytest.raises(ValueError, match="plain filename stem source_stem"):
+    asr_wer.require_manifest_stem({"source_stem": "/tmp/call"}, "source_stem")
   with pytest.raises(ValueError, match="numeric duration_seconds"):
     asr_wer.require_manifest_number({"duration_seconds": "1"}, "duration_seconds")
+  with pytest.raises(ValueError, match="integer chunk_index"):
+    asr_wer.require_manifest_integer({"chunk_index": True}, "chunk_index")
 
 
 def test_prepared_ground_reads_chunks_and_writes_combined_root_artifacts(
@@ -1269,6 +1328,133 @@ def test_process_prepared_sources_uses_existing_combined_ground(
   )
 
   assert [result.status for result in results] == ["skipped"]
+
+
+def test_process_prepared_sources_reports_chunks_output_collision(tmp_path: Path) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  source = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)[0]
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+  (output_dir / "chunks").write_text("not a directory", encoding="utf-8")
+
+  results = asr_wer.process_prepared_sources(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    prepared_sources=[source],
+    output_dir=output_dir,
+    base_url="https://example.com",
+    api_key=None,
+  )
+
+  assert [result.status for result in results] == ["failed"]
+  assert results[0].error_message is not None
+  assert "Prepared chunks output path is not a directory" in results[0].error_message
+
+
+def test_prepare_prepared_chunks_output_dir_reports_os_errors(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  output_dir = tmp_path / "ground"
+  original_mkdir = Path.mkdir
+
+  def fail_mkdir(
+    path: Path,
+    mode: int = 0o777,
+    parents: bool = False,
+    exist_ok: bool = False,
+  ) -> None:
+    if path == output_dir / "chunks":
+      raise PermissionError("denied")
+    original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+  monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+  error = asr_wer.prepare_prepared_chunks_output_dir(output_dir)
+
+  assert error is not None
+  assert "Unable to create prepared chunks output directory" in error
+
+
+def test_process_prepared_sources_uses_per_source_finish_times(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  prep_dir = audio_dir / "prep"
+  prep_dir.mkdir(parents=True)
+  for name in (
+    "call-a_0000_000000_030000.wav",
+    "call-a_0001_027000_050000.wav",
+    "call-b_0000_000000_030000.wav",
+    "call-b_0001_027000_050000.wav",
+  ):
+    write_audio(prep_dir / name)
+  manifest = {
+    "segment_duration_seconds": 30.0,
+    "overlap_seconds": 3.0,
+    "sources": [
+      {"source_file": "call-a.wav", "duration_seconds": 50.0, "chunk_count": 2},
+      {"source_file": "call-b.wav", "duration_seconds": 50.0, "chunk_count": 2},
+    ],
+    "chunks": [
+      {
+        "source_file": "call-a.wav",
+        "source_stem": "call-a",
+        "chunk_file": "call-a_0000_000000_030000.wav",
+        "chunk_index": 0,
+        "start_seconds": 0.0,
+        "end_seconds": 30.0,
+        "duration_seconds": 30.0,
+      },
+      {
+        "source_file": "call-a.wav",
+        "source_stem": "call-a",
+        "chunk_file": "call-a_0001_027000_050000.wav",
+        "chunk_index": 1,
+        "start_seconds": 27.0,
+        "end_seconds": 50.0,
+        "duration_seconds": 23.0,
+      },
+      {
+        "source_file": "call-b.wav",
+        "source_stem": "call-b",
+        "chunk_file": "call-b_0000_000000_030000.wav",
+        "chunk_index": 0,
+        "start_seconds": 0.0,
+        "end_seconds": 30.0,
+        "duration_seconds": 30.0,
+      },
+      {
+        "source_file": "call-b.wav",
+        "source_stem": "call-b",
+        "chunk_file": "call-b_0001_027000_050000.wav",
+        "chunk_index": 1,
+        "start_seconds": 27.0,
+        "end_seconds": 50.0,
+        "duration_seconds": 23.0,
+      },
+    ],
+  }
+  (prep_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+  sources = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+  output_dir = audio_dir / "ground"
+  output_dir.mkdir()
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
+  timestamps = iter([10.0, 20.0, 100.0, 101.0])
+  monkeypatch.setattr(asr_wer.time, "perf_counter", lambda: next(timestamps))
+
+  results = asr_wer.process_prepared_sources(
+    args=build_args("ground", str(audio_dir), "--prep", "--batch", "1"),
+    prepared_sources=sources,
+    output_dir=output_dir,
+    base_url="https://example.com",
+    api_key=None,
+  )
+
+  assert [result.elapsed_seconds for result in results] == [90.0, 81.0]
 
 
 def test_prepared_chunk_error_without_missing_chunks(tmp_path: Path) -> None:

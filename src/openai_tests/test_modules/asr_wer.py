@@ -307,15 +307,18 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
   for source_raw in sources_raw:
     if not isinstance(source_raw, dict) or not isinstance(source_raw.get("source_file"), str):
       raise ValueError("Prepared manifest source rows must include source_file")
-    source_durations[source_raw["source_file"]] = require_manifest_number(source_raw, "duration_seconds")
+    source_file = require_manifest_filename(source_raw, "source_file")
+    source_durations[source_file] = require_manifest_number(source_raw, "duration_seconds")
 
   grouped: dict[str, list[PreparedChunk]] = {}
   for chunk_raw in chunks_raw:
     if not isinstance(chunk_raw, dict):
       raise ValueError("Prepared manifest chunk rows must be objects")
-    source_file = require_manifest_string(chunk_raw, "source_file")
-    source_stem = require_manifest_string(chunk_raw, "source_stem")
-    chunk_file = require_manifest_string(chunk_raw, "chunk_file")
+    source_file = require_manifest_filename(chunk_raw, "source_file")
+    source_stem = require_manifest_stem(chunk_raw, "source_stem")
+    if source_stem != Path(source_file).stem:
+      raise ValueError(f"Prepared manifest source_stem {source_stem!r} does not match source_file {source_file!r}")
+    chunk_file = require_manifest_filename(chunk_raw, "chunk_file")
     chunk_path = audio_dir / "prep" / chunk_file
     if not chunk_path.is_file():
       raise ValueError(f"Prepared chunk file does not exist: {chunk_path}")
@@ -330,7 +333,7 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
       PreparedChunk(
         audio=chunk_audio,
         source=source_audio,
-        index=int(require_manifest_number(chunk_raw, "chunk_index")),
+        index=require_manifest_integer(chunk_raw, "chunk_index"),
         start_seconds=require_manifest_number(chunk_raw, "start_seconds"),
         end_seconds=require_manifest_number(chunk_raw, "end_seconds"),
         duration_seconds=require_manifest_number(chunk_raw, "duration_seconds"),
@@ -360,11 +363,32 @@ def require_manifest_string(row: dict[str, Any], key: str) -> str:
   return value
 
 
+def require_manifest_filename(row: dict[str, Any], key: str) -> str:
+  value = require_manifest_string(row, key)
+  if Path(value).is_absolute() or "/" in value or "\\" in value or value in {".", ".."}:
+    raise ValueError(f"Prepared manifest row requires plain filename {key}")
+  return value
+
+
+def require_manifest_stem(row: dict[str, Any], key: str) -> str:
+  value = require_manifest_string(row, key)
+  if Path(value).is_absolute() or "/" in value or "\\" in value or value in {".", ".."}:
+    raise ValueError(f"Prepared manifest row requires plain filename stem {key}")
+  return value
+
+
 def require_manifest_number(row: dict[str, Any], key: str) -> float:
   value = row.get(key)
   if not isinstance(value, (int, float)) or isinstance(value, bool):
     raise ValueError(f"Prepared manifest row requires numeric {key}")
   return float(value)
+
+
+def require_manifest_integer(row: dict[str, Any], key: str) -> int:
+  value = row.get(key)
+  if not isinstance(value, int) or isinstance(value, bool):
+    raise ValueError(f"Prepared manifest row requires integer {key}")
+  return value
 
 
 def resolve_output_dir(args: argparse.Namespace, audio_dir: Path) -> Path:
@@ -491,12 +515,27 @@ def process_prepared_sources(
 ) -> list[FileResult]:
   """Transcribe prepared chunks with shared concurrency and stitch by source."""
 
-  output_dir.joinpath("chunks").mkdir(parents=True, exist_ok=True)
+  chunks_dir_error = prepare_prepared_chunks_output_dir(output_dir)
+  if chunks_dir_error is not None:
+    return [
+      build_failed_file_result(
+        audio_file=source.audio,
+        output_path=output_dir / f"{source.audio.stem}.txt",
+        normalized_output_path=output_dir / f"{source.audio.stem}_normalized.txt",
+        elapsed_seconds=None,
+        error_message=chunks_dir_error,
+        duration_seconds=source.duration_seconds,
+        chunk_count=len(source.chunks),
+      )
+      for source in prepared_sources
+    ]
   results_by_source: dict[str, FileResult] = {}
   all_chunks = [chunk for source in prepared_sources for chunk in source.chunks]
   chunk_transcripts: dict[str, dict[int, str]] = {source.audio.path.name: {} for source in prepared_sources}
   chunk_errors: dict[str, list[str]] = {source.audio.path.name: [] for source in prepared_sources}
   started_by_source: dict[str, float] = {}
+  finished_by_source: dict[str, float] = {}
+  remaining_by_source: dict[str, int] = {source.audio.path.name: len(source.chunks) for source in prepared_sources}
 
   with tqdm(total=len(all_chunks), unit="chunk") as progress:
     with ThreadPoolExecutor(max_workers=args.batch) as executor:
@@ -529,13 +568,17 @@ def process_prepared_sources(
           atomic_write_text(chunk_output, transcript)
         except Exception as exc:
           chunk_errors[chunk.source.path.name].append(str(exc))
+        remaining_by_source[chunk.source.path.name] -= 1
+        if remaining_by_source[chunk.source.path.name] == 0:
+          finished_by_source[chunk.source.path.name] = time.perf_counter()
         progress.update(1)
 
   for source in prepared_sources:
     if source.audio.path.name in results_by_source:
       continue
-    started_at = started_by_source.get(source.audio.path.name, time.perf_counter())
-    elapsed = max(time.perf_counter() - started_at, 0.0)
+    started_at = started_by_source[source.audio.path.name]
+    finished_at = finished_by_source[source.audio.path.name]
+    elapsed = max(finished_at - started_at, 0.0)
     results_by_source[source.audio.path.name] = build_prepared_source_result(
       args=args,
       source=source,
@@ -547,6 +590,19 @@ def process_prepared_sources(
     tqdm.write(format_file_result(results_by_source[source.audio.path.name], mode=args.mode))
 
   return [results_by_source[source.audio.path.name] for source in prepared_sources]
+
+
+def prepare_prepared_chunks_output_dir(output_dir: Path) -> str | None:
+  """Create the prepared chunk audit directory or return a controlled failure message."""
+
+  chunks_dir = output_dir / "chunks"
+  if chunks_dir.exists() and not chunks_dir.is_dir():
+    return f"Prepared chunks output path is not a directory: {chunks_dir}"
+  try:
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+  except OSError as exc:
+    return f"Unable to create prepared chunks output directory {chunks_dir}: {exc}"
+  return None
 
 
 def maybe_skip_prepared_ground_file(

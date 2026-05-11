@@ -50,6 +50,26 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   assert asr_prep.run(build_args(str(empty))) == 2
   assert "No supported audio files" in capsys.readouterr().err
 
+  duplicate_dir = tmp_path / "dupes"
+  duplicate_dir.mkdir()
+  write_audio(duplicate_dir / "call.wav")
+  write_audio(duplicate_dir / "call.mp3")
+  assert asr_prep.run(build_args(str(duplicate_dir))) == 2
+  assert "Duplicate audio file stem" in capsys.readouterr().err
+
+  collision_dir = tmp_path / "collisions"
+  collision_dir.mkdir()
+  write_audio(collision_dir / "call.wav")
+  write_audio(collision_dir / "call_normalized.wav")
+  assert asr_prep.run(build_args(str(collision_dir))) == 2
+  assert "Output artifact collision" in capsys.readouterr().err
+
+  reserved_dir = tmp_path / "reserved"
+  reserved_dir.mkdir()
+  write_audio(reserved_dir / "report.wav")
+  assert asr_prep.run(build_args(str(reserved_dir))) == 2
+  assert "reserved output artifact" in capsys.readouterr().err
+
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
@@ -166,6 +186,16 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: NumericAudio())
   assert asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav") == 1.5
+
+  class ZeroInfo:
+    length = 0.0
+
+  class ZeroAudio:
+    info = ZeroInfo()
+
+  monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: ZeroAudio())
+  with pytest.raises(ValueError, match="Unable to determine audio duration"):
+    asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
 
 
 def test_segment_planning_uses_stable_30_second_chunks_and_direct_children(tmp_path: Path) -> None:

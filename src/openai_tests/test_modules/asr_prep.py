@@ -106,7 +106,42 @@ def discover_audio_files(audio_dir: Path) -> list[AudioInput]:
   if not audio_files:
     supported = ", ".join(sorted(asr_simple.TRANSCRIPTION_CONTENT_TYPES))
     raise ValueError(f"No supported audio files found in {audio_dir}; expected extensions: {supported}")
+  validate_audio_inputs(audio_files)
   return audio_files
+
+
+def validate_audio_inputs(audio_files: list[AudioInput]) -> None:
+  """Reject input sets that would generate ambiguous prepared artifacts."""
+
+  stems: dict[str, Path] = {}
+  for audio_file in audio_files:
+    stem_key = audio_file.stem.casefold()
+    if stem_key in stems:
+      raise ValueError(
+        f"Duplicate audio file stem {audio_file.stem!r}: {stems[stem_key].name} and {audio_file.path.name}"
+      )
+    stems[stem_key] = audio_file.path
+  validate_output_artifact_names(audio_files)
+
+
+def validate_output_artifact_names(audio_files: list[AudioInput]) -> None:
+  """Reject source stems that asr-wer cannot consume after preparation."""
+
+  artifact_owner: dict[str, str] = {}
+  for audio_file in audio_files:
+    for artifact_name, kind in (
+      (f"{audio_file.stem}.txt", "exact transcript"),
+      (f"{audio_file.stem}_normalized.txt", "normalized transcript"),
+    ):
+      artifact_key = artifact_name.casefold()
+      if artifact_key == "report.txt":
+        raise ValueError(f"Audio stem {audio_file.stem!r} uses reserved output artifact {artifact_name!r}")
+      previous = artifact_owner.get(artifact_key)
+      if previous is not None:
+        raise ValueError(
+          f"Output artifact collision for {artifact_name!r}: {previous} and {audio_file.path.name} {kind}"
+        )
+      artifact_owner[artifact_key] = f"{audio_file.path.name} {kind}"
 
 
 def prepare_output_dir(audio_dir: Path) -> Path:
@@ -248,7 +283,7 @@ def write_report(
 def get_audio_duration_seconds(audio_path: Path) -> float:
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
-  if isinstance(length, (int, float)) and not isinstance(length, bool):
+  if isinstance(length, (int, float)) and not isinstance(length, bool) and length > 0:
     return float(length)
   raise ValueError(f"Unable to determine audio duration for {audio_path}")
 
