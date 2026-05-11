@@ -75,6 +75,8 @@ def run(args: argparse.Namespace) -> int:
         except Exception as exc:
           raise ValueError(f"Unable to read audio duration for {audio_file.path.name}: {exc}") from exc
         duration = round(duration, 3)
+        if duration <= 0:
+          raise ValueError(f"Audio duration for {audio_file.path.name} rounds to 0 seconds")
         segments = plan_segments(
           audio_file,
           duration_seconds=duration,

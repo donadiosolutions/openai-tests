@@ -1061,6 +1061,15 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
       }
     ],
   }
+  symlink_target = write_audio(audio_dir / "outside.wav")
+  (prep_dir / "call_0000_000000_001000.wav").unlink()
+  (prep_dir / "call_0000_000000_001000.wav").symlink_to(symlink_target)
+  manifest_path.write_text(json.dumps(unsafe_base), encoding="utf-8")
+  with pytest.raises(ValueError, match="must not be a symlink"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+  (prep_dir / "call_0000_000000_001000.wav").unlink()
+  write_audio(prep_dir / "call_0000_000000_001000.wav")
+
   duplicate_source = dict(unsafe_base)
   duplicate_source["sources"] = [
     {"source_file": "call.wav", "duration_seconds": 1.0, "chunk_count": 1},
@@ -1584,6 +1593,12 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=0.0) == (
     "alpha repeated repeated bravo"
   )
+  assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=0.001) == (
+    "alpha repeated repeated bravo"
+  )
+  assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=1.0) == (
+    "alpha repeated bravo"
+  )
 
   duplicate_chunk_source = asr_wer.PreparedSource(
     audio=sources[0].audio,
@@ -1746,7 +1761,7 @@ def test_process_prepared_sources_uses_per_source_finish_times(
   output_dir.mkdir()
 
   monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
-  timestamps = iter([10.0, 20.0, 100.0, 101.0])
+  timestamps = iter([10.0, 11.0, 20.0, 21.0, 100.0, 101.0, 102.0, 103.0])
   monkeypatch.setattr(asr_wer.time, "perf_counter", lambda: next(timestamps))
 
   results = asr_wer.process_prepared_sources(
@@ -1757,7 +1772,7 @@ def test_process_prepared_sources_uses_per_source_finish_times(
     api_key=None,
   )
 
-  assert [result.elapsed_seconds for result in results] == [10.0, 1.0]
+  assert [result.elapsed_seconds for result in results] == [10.0, 80.0]
 
 
 def test_transcribe_prepared_chunk_starts_timer_inside_worker(
@@ -1774,22 +1789,55 @@ def test_transcribe_prepared_chunk_starts_timer_inside_worker(
     duration_seconds=30.0,
   )
   started_by_source: dict[str, float] = {}
-  monkeypatch.setattr(asr_wer.time, "perf_counter", lambda: 123.0)
+  timestamps = iter([123.0, 124.0])
+  monkeypatch.setattr(asr_wer.time, "perf_counter", lambda: next(timestamps))
   monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
 
-  assert (
-    asr_wer.transcribe_prepared_chunk(
-      args=build_args("ground", str(tmp_path), "--prep"),
-      chunk=chunk,
-      base_url="https://example.com",
-      api_key=None,
-      started_by_source=started_by_source,
-      timing_lock=threading.Lock(),
-    )
-    == "Alpha"
-  )
+  assert asr_wer.transcribe_prepared_chunk(
+    args=build_args("ground", str(tmp_path), "--prep"),
+    chunk=chunk,
+    base_url="https://example.com",
+    api_key=None,
+    started_by_source=started_by_source,
+    timing_lock=threading.Lock(),
+  ) == ("Alpha", 124.0)
 
   assert started_by_source == {"call.wav": 123.0}
+
+
+def test_prepared_chunk_audit_write_failure_marks_source_failed(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "call.wav")
+  write_prep_manifest(audio_dir)
+  source = asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)[0]
+  output_dir = audio_dir / "ground"
+  (output_dir / "chunks").mkdir(parents=True)
+  original_atomic_write_text = asr_wer.atomic_write_text
+
+  def fail_chunk_audit_write(path: Path, text: str) -> None:
+    """Fail only per-chunk audit transcript writes."""
+
+    if path.parent.name == "chunks":
+      raise OSError("audit write failed")
+    original_atomic_write_text(path, text)
+
+  monkeypatch.setattr(asr_wer, "transcribe_with_selected_endpoint", lambda **_: "Alpha")
+  monkeypatch.setattr(asr_wer, "atomic_write_text", fail_chunk_audit_write)
+
+  result = asr_wer.process_prepared_sources(
+    args=build_args("ground", str(audio_dir), "--prep", "--batch", "1"),
+    prepared_sources=[source],
+    output_dir=output_dir,
+    base_url="https://example.com",
+    api_key=None,
+  )[0]
+
+  assert result.status == "failed"
+  assert "audit write failed" in str(result.error_message)
 
 
 def test_prepared_chunk_error_without_missing_chunks(tmp_path: Path) -> None:

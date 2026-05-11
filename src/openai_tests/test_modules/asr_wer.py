@@ -420,6 +420,8 @@ def parse_prepared_manifest_chunk(
     raise ValueError(f"Prepared manifest duplicate chunk_file {chunk_file}")
   seen_chunk_files.add(chunk_key)
   chunk_path = audio_dir / "prep" / chunk_file
+  if chunk_path.is_symlink():
+    raise ValueError(f"Prepared chunk file must not be a symlink: {chunk_path}")
   if not chunk_path.is_file():
     raise ValueError(f"Prepared chunk file does not exist: {chunk_path}")
   source_path = audio_dir / source_file
@@ -732,7 +734,7 @@ def process_prepared_sources(
     tqdm(total=total_chunks, unit="chunk") as progress,
     ThreadPoolExecutor(max_workers=args.batch) as executor,
   ):
-    futures: dict[Future[str], PreparedChunk] = {}
+    futures: dict[Future[tuple[str, float]], PreparedChunk] = {}
     chunks_to_submit: list[PreparedChunk] = []
     for source in prepared_sources:
       skipped_result = maybe_skip_prepared_ground_file(args, source, output_dir)
@@ -771,15 +773,20 @@ def process_prepared_sources(
       for future in done:
         chunk = futures.pop(future)
         try:
-          transcript = future.result()
+          transcript, finished_at = future.result()
           chunk_transcripts[chunk.source.path.name][chunk.index] = transcript
-          chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
-          atomic_write_text(chunk_output, transcript)
         except Exception as exc:
           chunk_errors[chunk.source.path.name].append(str(exc))
+          finished_at = time.perf_counter()
         remaining_by_source[chunk.source.path.name] -= 1
         if remaining_by_source[chunk.source.path.name] == 0:
-          finished_by_source[chunk.source.path.name] = time.perf_counter()
+          finished_by_source[chunk.source.path.name] = finished_at
+        if chunk.index in chunk_transcripts[chunk.source.path.name]:
+          chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
+          try:
+            atomic_write_text(chunk_output, transcript)
+          except Exception as exc:
+            chunk_errors[chunk.source.path.name].append(str(exc))
         progress.update(1)
         submit_next_chunk()
 
@@ -810,13 +817,14 @@ def transcribe_prepared_chunk(
   api_key: str | None,
   started_by_source: dict[str, float],
   timing_lock: threading.Lock,
-) -> str:
+) -> tuple[str, float]:
   """Transcribe one prepared chunk and mark its source start at worker execution time."""
 
   with timing_lock:
     if chunk.source.path.name not in started_by_source:
       started_by_source[chunk.source.path.name] = time.perf_counter()
-  return transcribe_with_selected_endpoint(args=args, audio_file=chunk.audio, base_url=base_url, api_key=api_key)
+  transcript = transcribe_with_selected_endpoint(args=args, audio_file=chunk.audio, base_url=base_url, api_key=api_key)
+  return transcript, time.perf_counter()
 
 
 def prepare_prepared_chunks_output_dir(output_dir: Path) -> str | None:
@@ -961,9 +969,8 @@ def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_secon
   """Stitch normalized chunks and remove exact repeated boundary tokens."""
 
   stitched: list[str] = []
-  max_overlap_tokens = (
-    0 if overlap_seconds == 0 else math.ceil(OVERLAP_TOKEN_RATE_PER_SECOND * overlap_seconds) + OVERLAP_TOKEN_BUFFER
-  )
+  expected_overlap_tokens = math.floor(OVERLAP_TOKEN_RATE_PER_SECOND * overlap_seconds)
+  max_overlap_tokens = 0 if expected_overlap_tokens == 0 else expected_overlap_tokens + OVERLAP_TOKEN_BUFFER
   for normalized in normalized_chunks:
     words = normalized.split()
     if not stitched:

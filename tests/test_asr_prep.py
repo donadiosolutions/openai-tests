@@ -287,6 +287,11 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   assert "Unable to read audio duration" in capsys.readouterr().err
 
   monkeypatch.undo()
+  monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 0.0004)
+  assert asr_prep.run(build_args(str(audio_dir))) == 2
+  assert "rounds to 0 seconds" in capsys.readouterr().err
+
+  monkeypatch.undo()
   prep_tmp_dir = tmp_path / "prep-write-failures"
   prep_tmp_dir.mkdir()
   segment = asr_prep.Segment(
