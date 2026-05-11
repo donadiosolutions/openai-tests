@@ -184,7 +184,7 @@ pipx run openai-tests asr-simple \
 Use `asr-prep` when long audio should be segmented the same way every run:
 
 ```bash
-pipx run openai-tests asr-prep ./calls --overlap 3.0
+uvx openai-tests asr-prep ./calls --overlap 3.0
 ```
 
 This writes `./calls/prep/manifest.json`, `./calls/prep/report.txt`, and
@@ -195,11 +195,11 @@ Create prepared ground truth, then evaluate a model against the stitched
 per-source transcripts:
 
 ```bash
-pipx run openai-tests asr-wer ground ./calls --prep \
+uvx openai-tests asr-wer ground ./calls --prep \
   --endpoint transcriptions \
   --transcriptions-model gpt-4o-transcribe
 
-pipx run openai-tests asr-wer eval ./calls --prep \
+uvx openai-tests asr-wer eval ./calls --prep \
   --endpoint transcriptions \
   --transcriptions-model gpt-4o-transcribe
 ```

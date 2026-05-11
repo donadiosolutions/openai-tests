@@ -29,8 +29,9 @@ recurse into subdirectories. Supported extensions match the ASR transcription
 content types used by `asr-simple` and `asr-wer`.
 
 Source filenames and stems must be plain filenames. The command rejects stems
-that would collide with later `asr-wer` output artifacts, such as
-`report.wav`, `clip.txt.wav`, or duplicate stems like `call.wav` and `call.mp3`.
+that would collide with later `asr-wer` output artifacts, such as `report.wav`,
+`call.wav` plus `call_normalized.wav`, or duplicate stems like `call.wav` and
+`call.mp3`.
 
 ## Outputs
 

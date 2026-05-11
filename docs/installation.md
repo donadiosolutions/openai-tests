@@ -12,8 +12,9 @@ The `asr-simple` module does not need `espeak-ng` for its default bundled MP3
 fixtures. `espeak-ng` is only needed when you want the CLI to synthesize custom
 written text by passing `--expected-transcript` without `--audio-file`.
 
-The `asr-prep` module requires `ffmpeg` on `PATH` because it writes normalized
-WAV chunks for prepared `asr-wer --prep` runs.
+The `asr-prep` module requires `ffmpeg` on `PATH` because it writes prepared
+PCM WAV chunks for `asr-wer --prep` runs. It does not perform loudness or audio
+normalization.
 
 ## Bootstrap
 

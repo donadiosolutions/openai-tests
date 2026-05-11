@@ -109,6 +109,7 @@ def validate_overlap(overlap: float) -> float:
 
   if not math.isfinite(overlap):
     raise ValueError("overlap must be finite")
+  overlap = round(overlap, 3)
   if overlap < 0:
     raise ValueError("overlap must be at least 0 seconds")
   if overlap >= SEGMENT_DURATION_SECONDS:
@@ -165,6 +166,7 @@ def validate_plain_filename(value: str, kind: str) -> None:
     or ":" in value
     or "/" in value
     or "\\" in value
+    or any(ord(character) < 32 or ord(character) == 127 for character in value)
     or value
     in {
       ".",
@@ -327,7 +329,13 @@ def write_manifest(
     "sources": sources,
     "chunks": [segment_to_manifest_row(segment) for segment in segments],
   }
-  (prep_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  try:
+    (prep_dir / "manifest.json").write_text(
+      json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+      encoding="utf-8",
+    )
+  except OSError as exc:
+    raise ValueError(f"Unable to write prep manifest in {prep_dir}: {exc}") from exc
 
 
 def segment_to_manifest_row(segment: Segment) -> dict[str, Any]:
@@ -372,7 +380,10 @@ def write_report(
     )
     for segment in segments
   )
-  (prep_dir / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+  try:
+    (prep_dir / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+  except OSError as exc:
+    raise ValueError(f"Unable to write prep report in {prep_dir}: {exc}") from exc
 
 
 def get_audio_duration_seconds(audio_path: Path) -> float:

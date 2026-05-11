@@ -1,9 +1,12 @@
+"""Tests for deterministic ASR preparation and manifest generation."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,17 +14,23 @@ from openai_tests.test_modules import asr_prep
 
 
 def build_args(*raw_args: str) -> argparse.Namespace:
+  """Build parsed asr-prep arguments from raw CLI tokens."""
+
   parser = argparse.ArgumentParser()
   asr_prep.configure_parser(parser)
   return parser.parse_args([*raw_args])
 
 
 def write_audio(path: Path) -> Path:
+  """Write a minimal RIFF-like audio fixture and return its path."""
+
   path.write_bytes(b"RIFF")
   return path
 
 
 def test_parser_accepts_audio_dir_and_overlap(tmp_path: Path) -> None:
+  """The parser accepts the audio directory and custom overlap."""
+
   args = build_args(str(tmp_path), "--overlap", "1.5")
 
   assert args.audio_dir == str(tmp_path)
@@ -33,12 +42,17 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """Configuration failures return clear validation errors."""
+
   with pytest.raises(ValueError, match="overlap must be at least 0"):
     asr_prep.validate_overlap(-0.1)
   with pytest.raises(ValueError, match="overlap must be less than 30"):
     asr_prep.validate_overlap(30.0)
+  with pytest.raises(ValueError, match="overlap must be less than 30"):
+    asr_prep.validate_overlap(29.9999)
   with pytest.raises(ValueError, match="overlap must be finite"):
     asr_prep.validate_overlap(float("nan"))
+  assert asr_prep.validate_overlap(1.2345) == 1.234
 
   assert asr_prep.run(build_args(str(tmp_path / "missing"))) == 2
   assert "Audio directory does not exist" in capsys.readouterr().err
@@ -84,6 +98,8 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   (prep_dir / "old.wav").unlink()
 
   def missing_ffmpeg(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+    """Simulate an environment without ffmpeg on PATH."""
+
     raise FileNotFoundError("ffmpeg")
 
   monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 1.0)
@@ -152,6 +168,8 @@ def test_staged_prep_output_does_not_delete_existing_temp_like_directory(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """Existing temp-like folders are not deleted by new prep runs."""
+
   audio_dir = tmp_path / "audio-existing-temp"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
@@ -221,12 +239,16 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """Directory, duration, and prep metadata write failures exit cleanly."""
+
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
   original_iterdir = Path.iterdir
 
   def fail_audio_iterdir(path: Path):
+    """Simulate failure while listing the selected audio directory."""
+
     if path == audio_dir:
       raise PermissionError("denied")
     return original_iterdir(path)
@@ -249,6 +271,8 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   (audio_dir / "prep").mkdir()
 
   def fail_prep_iterdir(path: Path):
+    """Simulate failure while checking whether prep output is empty."""
+
     if path == audio_dir / "prep":
       raise PermissionError("denied")
     return original_iterdir(path)
@@ -262,8 +286,48 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
   assert asr_prep.run(build_args(str(audio_dir))) == 2
   assert "Unable to read audio duration" in capsys.readouterr().err
 
+  monkeypatch.undo()
+  prep_tmp_dir = tmp_path / "prep-write-failures"
+  prep_tmp_dir.mkdir()
+  segment = asr_prep.Segment(
+    source_path=tmp_path / "source.wav",
+    source_file="source.wav",
+    source_stem="source",
+    chunk_path=prep_tmp_dir / "source_0000_000000_001000.wav",
+    index=0,
+    start_seconds=0.0,
+    end_seconds=1.0,
+    duration_seconds=1.0,
+  )
+  sources = [{"source_file": "source.wav", "duration_seconds": 1.0, "chunk_count": 1}]
+  original_write_text = Path.write_text
+
+  def fail_manifest_write(path: Path, *args: Any, **kwargs: Any) -> int:
+    """Simulate an OSError while writing manifest.json."""
+
+    if path.name == "manifest.json":
+      raise PermissionError("denied")
+    return original_write_text(path, *args, **kwargs)
+
+  monkeypatch.setattr(Path, "write_text", fail_manifest_write)
+  with pytest.raises(ValueError, match="Unable to write prep manifest"):
+    asr_prep.write_manifest(prep_tmp_dir, sources=sources, segments=[segment], overlap_seconds=3.0)
+
+  def fail_report_write(path: Path, *args: Any, **kwargs: Any) -> int:
+    """Simulate an OSError while writing report.txt."""
+
+    if path.name == "report.txt":
+      raise PermissionError("denied")
+    return original_write_text(path, *args, **kwargs)
+
+  monkeypatch.setattr(Path, "write_text", fail_report_write)
+  with pytest.raises(ValueError, match="Unable to write prep report"):
+    asr_prep.write_report(prep_tmp_dir, sources=sources, segments=[segment], overlap_seconds=3.0)
+
 
 def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """ffmpeg and duration helpers surface controlled ValueError failures."""
+
   segment = asr_prep.Segment(
     source_path=tmp_path / "source.wav",
     source_file="source.wav",
@@ -276,6 +340,8 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
   )
 
   def fail_run(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+    """Simulate an ffmpeg process failure."""
+
     raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="nope")
 
   monkeypatch.setattr(asr_prep.subprocess, "run", fail_run)
@@ -283,9 +349,13 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
     asr_prep.run_ffmpeg_segment(segment)
 
   class Info:
+    """Mutagen-like info object with a non-numeric length."""
+
     length = True
 
   class Audio:
+    """Mutagen-like audio object with invalid info."""
+
     info = Info()
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: Audio())
@@ -293,18 +363,26 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
     asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
 
   class NumericInfo:
+    """Mutagen-like info object with a valid length."""
+
     length = 1.5
 
   class NumericAudio:
+    """Mutagen-like audio object with valid info."""
+
     info = NumericInfo()
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: NumericAudio())
   assert asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav") == 1.5
 
   class ZeroInfo:
+    """Mutagen-like info object with a zero length."""
+
     length = 0.0
 
   class ZeroAudio:
+    """Mutagen-like audio object with zero-duration info."""
+
     info = ZeroInfo()
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: ZeroAudio())
@@ -312,9 +390,13 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
     asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
 
   class InfiniteInfo:
+    """Mutagen-like info object with infinite length."""
+
     length = float("inf")
 
   class InfiniteAudio:
+    """Mutagen-like audio object with infinite-duration info."""
+
     info = InfiniteInfo()
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: InfiniteAudio())
@@ -323,14 +405,20 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
 
 
 def test_validate_audio_inputs_rejects_names_that_prepared_wer_cannot_reload() -> None:
+  """Prep rejects input names that would make prepared WER ambiguous."""
+
   with pytest.raises(ValueError, match="plain filename"):
     asr_prep.validate_audio_inputs([asr_prep.AudioInput(path=Path("bad\\name.wav"), stem="bad\\name", format="wav")])
+  with pytest.raises(ValueError, match="plain filename"):
+    asr_prep.validate_audio_inputs([asr_prep.AudioInput(path=Path("call\t1.wav"), stem="call\t1", format="wav")])
 
   with pytest.raises(ValueError, match="source filename stem"):
     asr_prep.validate_audio_inputs([asr_prep.AudioInput(path=Path("..wav"), stem=".", format="wav")])
 
 
 def test_segment_planning_uses_stable_30_second_chunks_and_direct_children(tmp_path: Path) -> None:
+  """Segment planning uses stable chunk names and direct-child discovery."""
+
   audio_dir = tmp_path / "audio"
   nested = audio_dir / "nested"
   nested.mkdir(parents=True)
@@ -369,6 +457,8 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """A full prep run invokes ffmpeg and writes expected metadata artifacts."""
+
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "call.wav")
@@ -377,6 +467,8 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
   monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 31.0)
 
   def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    """Record ffmpeg command shape and create fake chunk outputs."""
+
     commands.append(command)
     Path(command[-1]).write_bytes(b"RIFF")
     assert kwargs["check"] is True
