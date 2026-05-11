@@ -1579,6 +1579,7 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   def fail_write(path: Path, text: str) -> None:
     raise OSError("disk full")
 
+  original_atomic_write_text = asr_wer.atomic_write_text
   monkeypatch.setattr(asr_wer, "atomic_write_text", fail_write)
   write_failed = asr_wer.build_prepared_source_result(
     args=build_args("ground", str(audio_dir), "--prep"),
@@ -1590,6 +1591,16 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   )
   assert write_failed.status == "failed"
   assert write_failed.error_message == "disk full"
+  monkeypatch.setattr(asr_wer, "atomic_write_text", original_atomic_write_text)
+  source_level_normalized = asr_wer.build_prepared_source_result(
+    args=build_args("ground", str(audio_dir), "--prep"),
+    source=sources[0],
+    output_dir=output_dir,
+    chunk_transcripts={0: "twenty", 1: "one pilots"},
+    chunk_errors=[],
+    elapsed_seconds=1.0,
+  )
+  assert source_level_normalized.normalized_transcript == "21 pilots"
   assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=0.0) == (
     "alpha repeated repeated bravo"
   )
@@ -1598,6 +1609,9 @@ def test_prepared_skip_and_failure_branches(monkeypatch: pytest.MonkeyPatch, tmp
   )
   assert asr_wer.stitch_normalized_transcripts(["alpha repeated", "repeated bravo"], overlap_seconds=1.0) == (
     "alpha repeated bravo"
+  )
+  assert asr_wer.stitch_exact_transcripts(["Alpha repeated", "repeated Bravo"], overlap_seconds=1.0) == (
+    "Alpha repeated Bravo"
   )
 
   duplicate_chunk_source = asr_wer.PreparedSource(

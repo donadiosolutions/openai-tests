@@ -728,6 +728,7 @@ def process_prepared_sources(
   started_by_source: dict[str, float] = {}
   finished_by_source: dict[str, float] = {}
   remaining_by_source: dict[str, int] = {source.audio.path.name: len(source.chunks) for source in prepared_sources}
+  latest_finished_by_source: dict[str, float] = {}
   timing_lock = threading.Lock()
 
   with (
@@ -778,10 +779,12 @@ def process_prepared_sources(
         except Exception as exc:
           chunk_errors[chunk.source.path.name].append(str(exc))
           finished_at = time.perf_counter()
-        remaining_by_source[chunk.source.path.name] -= 1
-        if remaining_by_source[chunk.source.path.name] == 0:
-          finished_by_source[chunk.source.path.name] = finished_at
-        if chunk.index in chunk_transcripts[chunk.source.path.name]:
+        source_name = chunk.source.path.name
+        latest_finished_by_source[source_name] = max(finished_at, latest_finished_by_source.get(source_name, 0.0))
+        remaining_by_source[source_name] -= 1
+        if remaining_by_source[source_name] == 0:
+          finished_by_source[source_name] = latest_finished_by_source[source_name]
+        if chunk.index in chunk_transcripts[source_name]:
           chunk_output = output_dir / "chunks" / f"{chunk.audio.stem}.txt"
           try:
             atomic_write_text(chunk_output, transcript)
@@ -912,9 +915,8 @@ def build_prepared_source_result(
   else:
     ordered_transcripts = [chunk_transcripts[chunk.index] for chunk in source.chunks]
     transcript = "\n".join(ordered_transcripts)
-    normalized = stitch_normalized_transcripts(
-      [normalize_transcript(transcript) for transcript in ordered_transcripts],
-      overlap_seconds=source.overlap_seconds,
+    normalized = normalize_transcript(
+      stitch_exact_transcripts(ordered_transcripts, overlap_seconds=source.overlap_seconds)
     )
     try:
       atomic_write_text(exact_path, transcript)
@@ -965,14 +967,14 @@ def build_prepared_source_result(
   return result
 
 
-def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
-  """Stitch normalized chunks and remove exact repeated boundary tokens."""
+def stitch_exact_transcripts(chunks: list[str], *, overlap_seconds: float) -> str:
+  """Stitch exact chunks and remove exact repeated boundary tokens."""
 
   stitched: list[str] = []
   expected_overlap_tokens = math.floor(OVERLAP_TOKEN_RATE_PER_SECOND * overlap_seconds)
   max_overlap_tokens = 0 if expected_overlap_tokens == 0 else expected_overlap_tokens + OVERLAP_TOKEN_BUFFER
-  for normalized in normalized_chunks:
-    words = normalized.split()
+  for chunk in chunks:
+    words = chunk.split()
     if not stitched:
       stitched.extend(words)
       continue
@@ -984,6 +986,12 @@ def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_secon
         break
     stitched.extend(words[overlap:])
   return " ".join(stitched)
+
+
+def stitch_normalized_transcripts(normalized_chunks: list[str], *, overlap_seconds: float) -> str:
+  """Stitch already-normalized chunks and remove exact repeated boundary tokens."""
+
+  return stitch_exact_transcripts(normalized_chunks, overlap_seconds=overlap_seconds)
 
 
 def maybe_skip_ground_file(args: argparse.Namespace, audio_file: AudioInput, output_dir: Path) -> FileResult | None:
