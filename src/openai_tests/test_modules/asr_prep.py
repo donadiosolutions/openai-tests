@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -55,26 +56,37 @@ def run(args: argparse.Namespace) -> int:
     audio_dir = Path(args.audio_dir)
     audio_files = discover_audio_files(audio_dir)
     prep_dir = prepare_output_dir(audio_dir)
+    prep_tmp_dir = prepare_temp_output_dir(audio_dir)
     all_segments: list[Segment] = []
     source_rows: list[dict[str, Any]] = []
-    for audio_file in audio_files:
-      try:
-        duration = get_audio_duration_seconds(audio_file.path)
-      except Exception as exc:
-        raise ValueError(f"Unable to read audio duration for {audio_file.path.name}: {exc}") from exc
-      segments = plan_segments(audio_file, duration_seconds=duration, overlap_seconds=overlap, output_dir=prep_dir)
-      for segment in segments:
-        run_ffmpeg_segment(segment)
-      all_segments.extend(segments)
-      source_rows.append(
-        {
-          "source_file": audio_file.path.name,
-          "duration_seconds": round(duration, 3),
-          "chunk_count": len(segments),
-        }
-      )
-    write_manifest(prep_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
-    write_report(prep_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
+    try:
+      for audio_file in audio_files:
+        try:
+          duration = get_audio_duration_seconds(audio_file.path)
+        except Exception as exc:
+          raise ValueError(f"Unable to read audio duration for {audio_file.path.name}: {exc}") from exc
+        segments = plan_segments(
+          audio_file,
+          duration_seconds=duration,
+          overlap_seconds=overlap,
+          output_dir=prep_tmp_dir,
+        )
+        for segment in segments:
+          run_ffmpeg_segment(segment)
+        all_segments.extend(segments)
+        source_rows.append(
+          {
+            "source_file": audio_file.path.name,
+            "duration_seconds": round(duration, 3),
+            "chunk_count": len(segments),
+          }
+        )
+      write_manifest(prep_tmp_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
+      write_report(prep_tmp_dir, sources=source_rows, segments=all_segments, overlap_seconds=overlap)
+      finalize_output_dir(prep_tmp_dir, prep_dir)
+    except Exception:
+      cleanup_temp_output_dir(prep_tmp_dir)
+      raise
   except ValueError as exc:
     print(f"Configuration error: {exc}", file=sys.stderr)
     return 2
@@ -171,15 +183,44 @@ def prepare_output_dir(audio_dir: Path) -> Path:
   if prep_dir.exists() and not prep_dir.is_dir():
     raise ValueError(f"Prep output path is not a directory: {prep_dir}")
   try:
-    prep_dir.mkdir(parents=True, exist_ok=True)
-  except OSError as exc:
-    raise ValueError(f"Unable to create prep output directory {prep_dir}: {exc}") from exc
-  try:
-    if any(prep_dir.iterdir()):
+    if prep_dir.exists() and any(prep_dir.iterdir()):
       raise ValueError(f"Prep output directory already exists and is not empty: {prep_dir}")
   except OSError as exc:
     raise ValueError(f"Unable to list prep output directory {prep_dir}: {exc}") from exc
   return prep_dir
+
+
+def prepare_temp_output_dir(audio_dir: Path) -> Path:
+  """Create an empty staging directory for prep output."""
+
+  prep_tmp_dir = audio_dir / ".prep.tmp"
+  cleanup_temp_output_dir(prep_tmp_dir)
+  try:
+    prep_tmp_dir.mkdir(parents=True)
+  except OSError as exc:
+    raise ValueError(f"Unable to create temporary prep output directory {prep_tmp_dir}: {exc}") from exc
+  return prep_tmp_dir
+
+
+def cleanup_temp_output_dir(prep_tmp_dir: Path) -> None:
+  """Remove a staged prep output directory if one exists."""
+
+  try:
+    if prep_tmp_dir.exists():
+      shutil.rmtree(prep_tmp_dir)
+  except OSError as exc:
+    raise ValueError(f"Unable to remove temporary prep output directory {prep_tmp_dir}: {exc}") from exc
+
+
+def finalize_output_dir(prep_tmp_dir: Path, prep_dir: Path) -> None:
+  """Move staged prep output into its final prep directory."""
+
+  try:
+    if prep_dir.exists():
+      prep_dir.rmdir()
+    prep_tmp_dir.rename(prep_dir)
+  except OSError as exc:
+    raise ValueError(f"Unable to move temporary prep output directory into place at {prep_dir}: {exc}") from exc
 
 
 def plan_segments(

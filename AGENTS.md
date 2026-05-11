@@ -21,6 +21,8 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 - before adding any new dependency, run `socket package score <ecosystem> <name>@<version> --json` and evaluate the score, alerts,
   and transitive dependency findings before deciding whether to use it
 - add extra `AGENTS.md` files whenever there are substantial extra instructions pertaining to a given subtree
+- always write docstrings for every function, method, class, and module, and for any non-trivial code block, especially if it is not immediately clear what it does or why it is necessary
+- keep the user documentation both in `docs` and in `README.md` up to date with any changes to behavior, features, or usage
 
 ## Workflow
 
@@ -69,3 +71,4 @@ A task is not complete unless:
 - 100% line and branch coverage remain intact
 - all required checks pass
 - the final response states what changed, which tests failed before implementation, what verification passed afterward, and any unresolved assumptions or concerns
+- documentation was updated

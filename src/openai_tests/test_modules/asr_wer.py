@@ -402,6 +402,7 @@ def resolve_prepared_audio_files(audio_dir: Path, *, requested_overlap: float | 
       source_file=source_file,
       source_duration=source_durations[source_file],
       overlap=overlap,
+      segment_duration=segment_duration,
       chunks=grouped[source_file],
     )
 
@@ -426,18 +427,33 @@ def validate_prepared_chunk_ranges(
   source_file: str,
   source_duration: float,
   overlap: float,
+  segment_duration: float,
   chunks: list[PreparedChunk],
 ) -> None:
   """Validate that manifest chunk timing rebuilds the declared source duration."""
 
   sorted_chunks = sorted(chunks, key=lambda chunk: chunk.index)
-  if not math.isclose(sorted_chunks[0].start_seconds, 0.0, rel_tol=0.0, abs_tol=0.001):
+  tolerance = 0.001
+  for index, chunk in enumerate(sorted_chunks):
+    window = chunk.end_seconds - chunk.start_seconds
+    if window <= 0 or not math.isclose(window, chunk.duration_seconds, rel_tol=0.0, abs_tol=tolerance):
+      raise ValueError(f"Prepared manifest chunk duration mismatch for {source_file}")
+    if chunk.duration_seconds > segment_duration + tolerance:
+      raise ValueError(f"Prepared manifest chunk duration exceeds segment_duration_seconds for {source_file}")
+    if index < len(sorted_chunks) - 1 and not math.isclose(
+      chunk.duration_seconds,
+      segment_duration,
+      rel_tol=0.0,
+      abs_tol=tolerance,
+    ):
+      raise ValueError(f"Prepared manifest non-final chunks for {source_file} must match segment_duration_seconds")
+  if not math.isclose(sorted_chunks[0].start_seconds, 0.0, rel_tol=0.0, abs_tol=tolerance):
     raise ValueError(f"Prepared manifest chunk ranges for {source_file} must start at 0")
-  if not math.isclose(sorted_chunks[-1].end_seconds, source_duration, rel_tol=0.0, abs_tol=0.001):
+  if not math.isclose(sorted_chunks[-1].end_seconds, source_duration, rel_tol=0.0, abs_tol=tolerance):
     raise ValueError(f"Prepared manifest chunk ranges for {source_file} must end at source duration")
   expected_next_start = sorted_chunks[0].end_seconds - overlap
   for chunk in sorted_chunks[1:]:
-    if not math.isclose(chunk.start_seconds, expected_next_start, rel_tol=0.0, abs_tol=0.001):
+    if not math.isclose(chunk.start_seconds, expected_next_start, rel_tol=0.0, abs_tol=tolerance):
       raise ValueError(f"Prepared manifest chunk range gap for {source_file}")
     expected_next_start = chunk.end_seconds - overlap
 

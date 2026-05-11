@@ -1167,6 +1167,57 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   ):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
+  impossible_ranges = dict(unsafe_base)
+  impossible_ranges["sources"] = [{"source_file": "call.wav", "duration_seconds": 20.0, "chunk_count": 2}]
+  impossible_ranges["chunks"] = [
+    {**unsafe_base["chunks"][0], "end_seconds": 30.0, "duration_seconds": 30.0},
+    {
+      **unsafe_base["chunks"][0],
+      "chunk_file": "call_0001_001000_002000.wav",
+      "chunk_index": 1,
+      "start_seconds": 27.0,
+      "end_seconds": 20.0,
+      "duration_seconds": 1.0,
+    },
+  ]
+  manifest_path.write_text(json.dumps(impossible_ranges), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk duration mismatch for call\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  short_non_final_chunk = dict(unsafe_base)
+  short_non_final_chunk["sources"] = [{"source_file": "call.wav", "duration_seconds": 40.0, "chunk_count": 2}]
+  short_non_final_chunk["chunks"] = [
+    {**unsafe_base["chunks"][0], "end_seconds": 20.0, "duration_seconds": 20.0},
+    {
+      **unsafe_base["chunks"][0],
+      "chunk_file": "call_0001_001000_002000.wav",
+      "chunk_index": 1,
+      "start_seconds": 17.0,
+      "end_seconds": 40.0,
+      "duration_seconds": 23.0,
+    },
+  ]
+  manifest_path.write_text(json.dumps(short_non_final_chunk), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"non-final chunks for call\.wav must match segment_duration_seconds"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
+  oversized_chunk = dict(unsafe_base)
+  oversized_chunk["sources"] = [{"source_file": "call.wav", "duration_seconds": 58.0, "chunk_count": 2}]
+  oversized_chunk["chunks"] = [
+    {**unsafe_base["chunks"][0], "end_seconds": 31.0, "duration_seconds": 31.0},
+    {
+      **unsafe_base["chunks"][0],
+      "chunk_file": "call_0001_001000_002000.wav",
+      "chunk_index": 1,
+      "start_seconds": 28.0,
+      "end_seconds": 58.0,
+      "duration_seconds": 30.0,
+    },
+  ]
+  manifest_path.write_text(json.dumps(oversized_chunk), encoding="utf-8")
+  with pytest.raises(ValueError, match=r"chunk duration exceeds segment_duration_seconds for call\.wav"):
+    asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
+
   unsupported_chunk_file = dict(unsafe_base)
   unsupported_chunk_file["chunks"] = [{**unsafe_base["chunks"][0], "chunk_file": "manifest.json"}]
   manifest_path.write_text(json.dumps(unsupported_chunk_file), encoding="utf-8")
@@ -1180,7 +1231,9 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
 
   shifted_start_range = dict(unsafe_base)
-  shifted_start_range["chunks"] = [{**unsafe_base["chunks"][0], "start_seconds": 0.5, "end_seconds": 1.0}]
+  shifted_start_range["chunks"] = [
+    {**unsafe_base["chunks"][0], "start_seconds": 0.5, "end_seconds": 1.0, "duration_seconds": 0.5}
+  ]
   manifest_path.write_text(json.dumps(shifted_start_range), encoding="utf-8")
   with pytest.raises(ValueError, match=r"chunk ranges for call\.wav must start at 0"):
     asr_wer.resolve_prepared_audio_files(audio_dir, requested_overlap=None)
@@ -1188,7 +1241,7 @@ def test_prepared_manifest_configuration_errors(tmp_path: Path) -> None:
   gap_ranges = dict(unsafe_base)
   gap_ranges["sources"] = [{"source_file": "call.wav", "duration_seconds": 50.0, "chunk_count": 2}]
   gap_ranges["chunks"] = [
-    unsafe_base["chunks"][0],
+    {**unsafe_base["chunks"][0], "end_seconds": 30.0, "duration_seconds": 30.0},
     {
       **unsafe_base["chunks"][0],
       "chunk_file": "call_0001_001000_002000.wav",

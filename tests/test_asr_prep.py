@@ -92,6 +92,69 @@ def test_configuration_errors_cover_input_overlap_prep_and_ffmpeg(
   assert "ffmpeg was not found" in capsys.readouterr().err
 
 
+def test_failed_segmentation_cleans_staged_prep_output(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  """Failed staged segmentation removes temporary output and leaves final prep absent."""
+
+  audio_dir = tmp_path / "audio-cleanup"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+
+  def fail_ffmpeg(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
+    """Simulate a transient ffmpeg failure."""
+
+    raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="transient")
+
+  monkeypatch.setattr(asr_prep, "get_audio_duration_seconds", lambda path: 31.0)
+  monkeypatch.setattr(asr_prep.subprocess, "run", fail_ffmpeg)
+
+  assert asr_prep.run(build_args(str(audio_dir))) == 2
+  assert "ffmpeg failed" in capsys.readouterr().err
+  assert not (audio_dir / "prep").exists()
+  assert not (audio_dir / ".prep.tmp").exists()
+
+
+def test_staged_prep_helpers_report_cleanup_and_finalize_failures(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  """Temporary prep helpers report cleanup and finalization filesystem failures."""
+
+  prep_tmp_dir = tmp_path / ".prep.tmp"
+  prep_tmp_dir.mkdir()
+
+  def fail_rmtree(path: Path) -> None:
+    """Simulate a failure while removing staged prep output."""
+
+    raise PermissionError(f"denied: {path}")
+
+  monkeypatch.setattr(asr_prep.shutil, "rmtree", fail_rmtree)
+  with pytest.raises(ValueError, match="Unable to remove temporary prep output directory"):
+    asr_prep.cleanup_temp_output_dir(prep_tmp_dir)
+
+  monkeypatch.undo()
+  prep_dir = tmp_path / "prep"
+  prep_dir.mkdir()
+  asr_prep.finalize_output_dir(prep_tmp_dir, prep_dir)
+  assert prep_dir.is_dir()
+  assert not prep_tmp_dir.exists()
+
+  prep_tmp_dir.mkdir()
+  prep_dir.mkdir(exist_ok=True)
+
+  def fail_rename(path: Path, target: Path) -> None:
+    """Simulate a failure while moving staged prep output into place."""
+
+    raise PermissionError(f"denied: {path} -> {target}")
+
+  monkeypatch.setattr(Path, "rename", fail_rename)
+  with pytest.raises(ValueError, match="Unable to move temporary prep output directory"):
+    asr_prep.finalize_output_dir(prep_tmp_dir, tmp_path / "prep-failed")
+
+
 def test_configuration_errors_cover_duration_listing_and_output_failures(
   capsys: pytest.CaptureFixture[str],
   monkeypatch: pytest.MonkeyPatch,
@@ -125,13 +188,13 @@ def test_configuration_errors_cover_duration_listing_and_output_failures(
     parents: bool = False,
     exist_ok: bool = False,
   ) -> None:
-    if path == audio_dir / "prep":
+    if path == audio_dir / ".prep.tmp":
       raise PermissionError("denied")
     original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
 
   monkeypatch.setattr(Path, "mkdir", fail_mkdir)
   assert asr_prep.run(build_args(str(audio_dir))) == 2
-  assert "Unable to create prep output directory" in capsys.readouterr().err
+  assert "Unable to create temporary prep output directory" in capsys.readouterr().err
   monkeypatch.setattr(Path, "mkdir", original_mkdir)
 
   (audio_dir / "prep").mkdir()
@@ -291,7 +354,7 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
       "-vn",
       "-acodec",
       "pcm_s16le",
-      str(audio_dir / "prep" / "call_0000_000000_030000.wav"),
+      str(audio_dir / ".prep.tmp" / "call_0000_000000_030000.wav"),
     ],
     [
       "ffmpeg",
@@ -307,7 +370,7 @@ def test_run_invokes_ffmpeg_and_writes_manifest_and_report(
       "-vn",
       "-acodec",
       "pcm_s16le",
-      str(audio_dir / "prep" / "call_0001_028750_031000.wav"),
+      str(audio_dir / ".prep.tmp" / "call_0001_028750_031000.wav"),
     ],
   ]
   manifest = json.loads((audio_dir / "prep" / "manifest.json").read_text(encoding="utf-8"))
