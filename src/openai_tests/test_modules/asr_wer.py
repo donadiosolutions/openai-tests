@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -503,6 +504,8 @@ def transcribe_with_completions(
     payload=payload,
     timeout=args.timeout,
   )
+  if args.verbose:
+    print_verbose_exchange(exchange)
   stream = payload.get("stream") is True
   transcript = asr_simple.extract_completions_response_text(
     exchange.response_json, exchange.response_body_text, stream=stream
@@ -540,6 +543,8 @@ def transcribe_with_transcriptions(
     file_format=audio_file.format,
     timeout=args.timeout,
   )
+  if args.verbose:
+    print_verbose_exchange(exchange)
   stream = payload.get("stream") is True
   response_format = payload.get("response_format")
   transcript = asr_simple.extract_transcription_response_text(
@@ -664,13 +669,28 @@ def compute_aggregate_rtfx(results: list[FileResult], *, wall_elapsed_seconds: f
 
 
 def get_audio_duration_seconds(audio_path: Path) -> float:
-  """Read audio duration from mutagen metadata, returning zero if unavailable."""
+  """Read audio duration from mutagen metadata, returning zero when length is absent."""
 
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
   if isinstance(length, int | float):
     return float(length)
   return 0.0
+
+
+def print_verbose_exchange(exchange: asr_simple.HttpExchange) -> None:
+  """Print request and response details for --verbose batch runs."""
+
+  print()
+  print("Request:")
+  print(f"{exchange.method} {exchange.url}")
+  print(json.dumps(asr_simple.redact_headers(exchange.request_headers), indent=2, sort_keys=True))
+  print(asr_simple.format_json_like(exchange.request_body))
+  print()
+  print("Response:")
+  print(f"HTTP {exchange.response_status if exchange.response_status is not None else 'N/A'}")
+  print(json.dumps(exchange.response_headers, indent=2, sort_keys=True))
+  print(exchange.response_body_text or "(empty)")
 
 
 def format_file_result(result: FileResult, *, mode: str) -> str:

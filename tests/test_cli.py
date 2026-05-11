@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import runpy
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -46,7 +47,7 @@ def test_parser_accepts_asr_simple_command() -> None:
   assert parsed.command == "asr-simple"
 
 
-def test_parser_accepts_asr_wer_command(tmp_path) -> None:
+def test_parser_accepts_asr_wer_command(tmp_path: Path) -> None:
   parser = build_parser()
   parsed = parser.parse_args(["asr-wer", "ground", str(tmp_path)])
   assert parsed.command == "asr-wer"

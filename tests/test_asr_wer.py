@@ -405,6 +405,73 @@ def test_default_transcriptions_payload_uses_asr_model(
   assert sent_fields[0]["model"] == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
 
 
+def test_verbose_transcriptions_prints_http_exchange(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+
+  def fake_send_multipart_request(**kwargs: object) -> asr_simple.HttpExchange:
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={"Authorization": "Bearer secret"},
+      request_body={"model": "gpt-asr"},
+      response_status=200,
+      response_headers={"Content-Type": "application/json"},
+      response_body_text='{"text":"Alpha"}',
+      response_json={"text": "Alpha"},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 1.0)
+
+  assert asr_wer.run(build_args("ground", str(audio_dir), "--verbose")) == 0
+  captured = capsys.readouterr()
+  assert "Request:" in captured.out
+  assert "POST https://api.openai.com/v1/audio/transcriptions" in captured.out
+  assert '"Authorization": "Bearer ***REDACTED***"' in captured.out
+  assert "Response:" in captured.out
+  assert "HTTP 200" in captured.out
+
+
+def test_verbose_completions_prints_http_exchange(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_path = write_audio(tmp_path / "clip.wav")
+
+  def fake_send_json_request(**kwargs: object) -> asr_simple.HttpExchange:
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={"Authorization": "Bearer secret"},
+      request_body=kwargs["payload"],
+      response_status=200,
+      response_headers={"Content-Type": "application/json"},
+      response_body_text=json.dumps({"choices": [{"message": {"content": "Alpha"}}]}),
+      response_json={"choices": [{"message": {"content": "Alpha"}}]},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_json_request", fake_send_json_request)
+  assert (
+    asr_wer.transcribe_with_completions(
+      args=build_args("ground", str(tmp_path), "--endpoint", "completions", "--verbose"),
+      audio_file=asr_wer.AudioInput(path=audio_path, stem="clip", format="wav"),
+      base_url="https://example.com",
+      api_key="key",
+    )
+    == "Alpha"
+  )
+  captured = capsys.readouterr()
+  assert "POST https://example.com/v1/chat/completions" in captured.out
+  assert "HTTP 200" in captured.out
+
+
 def test_ground_skips_existing_exact_transcript_and_backfills_normalized(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
