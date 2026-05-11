@@ -155,7 +155,8 @@ def test_ffmpeg_failure_and_duration_fallbacks(monkeypatch: pytest.MonkeyPatch, 
     info = Info()
 
   monkeypatch.setattr(asr_prep.mutagen, "File", lambda path: Audio())
-  assert asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav") == 0.0
+  with pytest.raises(ValueError, match="Unable to determine audio duration"):
+    asr_prep.get_audio_duration_seconds(tmp_path / "clip.wav")
 
   class NumericInfo:
     length = 1.5

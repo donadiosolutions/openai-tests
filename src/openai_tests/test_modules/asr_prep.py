@@ -250,7 +250,7 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
   length = getattr(getattr(audio, "info", None), "length", None)
   if isinstance(length, (int, float)) and not isinstance(length, bool):
     return float(length)
-  return 0.0
+  raise ValueError(f"Unable to determine audio duration for {audio_path}")
 
 
 ASR_PREP_MODULE = EndpointTestModule(
