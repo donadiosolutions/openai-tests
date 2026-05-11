@@ -139,6 +139,8 @@ def validate_args(args: argparse.Namespace) -> None:
     raise ValueError("prompt cannot be provided with completions prompt overrides")
   if args.endpoint == "completions" and args.completions_messages_json is not None:
     raise ValueError("completions-messages-json cannot be used with batch audio")
+  if args.endpoint == "completions" and args.service_tier is not None and args.completions_service_tier is not None:
+    raise ValueError("service-tier cannot be provided with completions-service-tier")
   validate_endpoint_request_config(args)
 
 
@@ -246,7 +248,10 @@ def create_output_dir(args: argparse.Namespace, requested_output_dir: Path) -> P
   if args.mode == "ground":
     if requested_output_dir.exists() and not requested_output_dir.is_dir():
       raise ValueError(f"Ground output path is not a directory: {requested_output_dir}")
-    requested_output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+      requested_output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+      raise ValueError(f"Unable to create ground output directory {requested_output_dir}: {exc}") from exc
     return requested_output_dir
 
   suffix = 0
@@ -257,6 +262,8 @@ def create_output_dir(args: argparse.Namespace, requested_output_dir: Path) -> P
     except FileExistsError:
       suffix += 1
       continue
+    except OSError as exc:
+      raise ValueError(f"Unable to create eval output directory {output_dir}: {exc}") from exc
     return output_dir
 
 
@@ -673,7 +680,7 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
 
   audio = mutagen.File(audio_path)
   length = getattr(getattr(audio, "info", None), "length", None)
-  if isinstance(length, int | float):
+  if isinstance(length, (int, float)) and not isinstance(length, bool):
     return float(length)
   return 0.0
 

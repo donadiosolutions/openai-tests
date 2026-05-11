@@ -142,7 +142,7 @@ def normalize_number_words(words: list[str]) -> list[str]:
       index += 2
       continue
     previous_word = words[index - 1] if index > 0 else None
-    if word == "one" and (previous_word in NUMBER_WORDS or next_word in NUMBER_WORDS):
+    if word == "one" and (is_numeric_context(previous_word) or is_numeric_context(next_word)):
       normalized.append("1")
     elif word in NUMBER_WORDS and word not in {"one"}:
       normalized.append(str(NUMBER_WORDS[word]))
@@ -150,3 +150,9 @@ def normalize_number_words(words: list[str]) -> list[str]:
       normalized.append(word)
     index += 1
   return normalized
+
+
+def is_numeric_context(word: str | None) -> bool:
+  """Return whether a neighboring token is numeric enough to normalize one."""
+
+  return word in NUMBER_WORDS or (word is not None and word.isdecimal())

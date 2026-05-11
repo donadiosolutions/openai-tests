@@ -115,6 +115,20 @@ def test_configuration_errors_cover_batch_audio_discovery_and_prompt_conflicts(t
       build_args("ground", str(tmp_path), "--endpoint", "completions", "--completions-messages-json", "[]")
     )
 
+  with pytest.raises(ValueError, match="service-tier cannot be provided with completions-service-tier"):
+    asr_wer.validate_args(
+      build_args(
+        "ground",
+        str(tmp_path),
+        "--endpoint",
+        "completions",
+        "--service-tier",
+        "flex",
+        "--completions-service-tier",
+        "scale",
+      )
+    )
+
   with pytest.raises(ValueError, match="plain text"):
     asr_wer.validate_args(
       build_args(
@@ -252,6 +266,34 @@ def test_create_output_dir_avoids_eval_collisions(tmp_path: Path) -> None:
   assert (tmp_path / "model_1234-1").is_dir()
 
 
+def test_eval_output_os_error_returns_configuration_error(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  (audio_dir / "ground").mkdir()
+  (audio_dir / "ground" / "clip_normalized.txt").write_text("alpha", encoding="utf-8")
+
+  def fake_mkdir(
+    path: Path,
+    mode: int = 0o777,
+    parents: bool = False,
+    exist_ok: bool = False,
+  ) -> None:
+    if path.name.startswith(asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL):
+      raise PermissionError("denied")
+    original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+  original_mkdir = Path.mkdir
+  monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+  assert asr_wer.run(build_args("eval", str(audio_dir))) == 2
+  captured = capsys.readouterr()
+  assert "Unable to create eval output directory" in captured.err
+
+
 def test_ground_output_file_collision_returns_configuration_error(
   capsys: pytest.CaptureFixture[str],
   monkeypatch: pytest.MonkeyPatch,
@@ -269,6 +311,32 @@ def test_ground_output_file_collision_returns_configuration_error(
   assert asr_wer.run(build_args("ground", str(audio_dir))) == 2
   captured = capsys.readouterr()
   assert "Ground output path is not a directory" in captured.err
+
+
+def test_ground_output_os_error_returns_configuration_error(
+  capsys: pytest.CaptureFixture[str],
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  original_mkdir = Path.mkdir
+
+  def fake_mkdir(
+    path: Path,
+    mode: int = 0o777,
+    parents: bool = False,
+    exist_ok: bool = False,
+  ) -> None:
+    if path == audio_dir / "ground":
+      raise PermissionError("denied")
+    original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+  monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+  assert asr_wer.run(build_args("ground", str(audio_dir))) == 2
+  captured = capsys.readouterr()
+  assert "Unable to create ground output directory" in captured.err
 
 
 def test_ground_transcriptions_writes_exact_and_normalized_outputs(
@@ -944,6 +1012,7 @@ def test_plain_wer_and_normalizer_regressions() -> None:
   )
   assert asr_wer.normalize_transcript("zero two thirty five") == "0 2 35"
   assert asr_wer.normalize_transcript("zero one two") == "0 1 2"
+  assert asr_wer.normalize_transcript("0 one 2") == "0 1 2"
 
 
 def test_duration_helper_uses_mutagen_file_and_handles_missing_length(
@@ -957,4 +1026,7 @@ def test_duration_helper_uses_mutagen_file_and_handles_missing_length(
   assert asr_wer.get_audio_duration_seconds(audio_path) == 12.5
 
   monkeypatch.setattr(asr_wer.mutagen, "File", lambda path: SimpleNamespace(info=SimpleNamespace()))
+  assert asr_wer.get_audio_duration_seconds(audio_path) == 0.0
+
+  monkeypatch.setattr(asr_wer.mutagen, "File", lambda path: SimpleNamespace(info=SimpleNamespace(length=True)))
   assert asr_wer.get_audio_duration_seconds(audio_path) == 0.0
