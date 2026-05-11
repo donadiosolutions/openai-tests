@@ -34,7 +34,7 @@ Read also @AGENTS.local.md when one is available. This file should be gitignored
 - For behavior changes or bug fixes, update tests first when practical and verify they fail for the expected reason before changing implementation.
 - Always write docstrings for every function, method, class, and module, and for any non-trivial code block, especially if it is
   not immediately clear what it does or why it is necessary.
-- Keep the user documentation both in `docs` and in `README.md` up to date with any changes to behavior, features, or usage.
+- Keep the user documentation both in `docs` and in `README.md` up-to-date with any changes to behavior, features, or usage.
 
 ## Dependency Security
 

@@ -330,19 +330,19 @@ def write_report(
     "",
     "source_file\tchunk_file\tchunk_index\tstart_seconds\tend_seconds\tduration_seconds",
   ]
-  for segment in segments:
-    lines.append(
-      "\t".join(
-        (
-          segment.source_file,
-          segment.chunk_path.name,
-          str(segment.index),
-          f"{segment.start_seconds:.3f}",
-          f"{segment.end_seconds:.3f}",
-          f"{segment.duration_seconds:.3f}",
-        )
+  lines.extend(
+    "\t".join(
+      (
+        segment.source_file,
+        segment.chunk_path.name,
+        str(segment.index),
+        f"{segment.start_seconds:.3f}",
+        f"{segment.end_seconds:.3f}",
+        f"{segment.duration_seconds:.3f}",
       )
     )
+    for segment in segments
+  )
   (prep_dir / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
