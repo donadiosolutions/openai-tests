@@ -128,6 +128,8 @@ def test_build_request_configs_reject_invalid_combinations() -> None:
 
 
 def test_parser_help_explains_penalty_scopes() -> None:
+  """Ensure CLI help documents generated-text and prompt-plus-generated penalty scopes."""
+
   parser = argparse.ArgumentParser()
   asr_simple.configure_parser(parser)
 

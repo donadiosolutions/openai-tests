@@ -155,7 +155,7 @@ pipx run openai-tests asr-simple \
 If the transcriptions endpoint needs a different model than chat completions,
 pass `--transcriptions-model` explicitly.
 
-For OpenAI-compatible providers that support repetition controls, pass
+For OpenAI-compatible providers that support penalty controls, pass
 `--completions-frequency-penalty`, `--completions-repetition-penalty`,
 `--transcriptions-frequency-penalty`, or
 `--transcriptions-repetition-penalty`. Frequency penalty applies to token

@@ -57,9 +57,7 @@ DEFAULT_ESPEAK_VOICE = "en-us"
 DEFAULT_ESPEAK_SPEED = 150
 DEFAULT_SYNTHESIZED_AUDIO_FORMAT = "wav"
 DEFAULT_MAX_WORD_ERROR_RATE = 0.15
-FREQUENCY_PENALTY_HELP = (
-  "Penalizes tokens based on their frequency in generated text only; provider-compatible for transcriptions."
-)
+FREQUENCY_PENALTY_HELP = "Penalizes tokens based on their frequency in generated text only."
 REPETITION_PENALTY_HELP = (
   "Provider-compatible sampling control that penalizes tokens appearing in the prompt and generated text."
 )

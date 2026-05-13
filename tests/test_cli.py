@@ -67,6 +67,22 @@ def test_parser_accepts_list_models_command() -> None:
   assert parsed.command == "list-models"
 
 
+def test_request_modules_accept_custom_timeout(tmp_path: Path) -> None:
+  """Verify every request-making module exposes a custom HTTP timeout."""
+
+  parser = build_parser()
+  cases = (
+    ["asr-simple", "--timeout", "12.5"],
+    ["asr-wer", "ground", str(tmp_path), "--timeout", "12.5"],
+    ["list-models", "--timeout", "12.5"],
+    ["text-simple", "--timeout", "12.5"],
+  )
+
+  for argv in cases:
+    parsed = parser.parse_args(argv)
+    assert parsed.timeout == 12.5
+
+
 def test_main_module_raises_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(sys, "argv", ["openai_tests"])
   with pytest.raises(SystemExit) as exc_info:

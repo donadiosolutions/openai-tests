@@ -36,6 +36,8 @@ uv run openai-tests asr-wer eval ./audio \
   --completions-model gpt-4o-audio-preview
 ```
 
+Use `--timeout SECONDS` to set the HTTP request timeout for either endpoint.
+
 ## Audio Discovery
 
 Without `--prep`, the command transcribes supported direct-child audio files in

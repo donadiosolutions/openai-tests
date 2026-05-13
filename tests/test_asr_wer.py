@@ -512,15 +512,19 @@ def test_transcriptions_payload_includes_penalties(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """Verify transcriptions requests forward frequency and repetition penalty flags."""
+
   audio_dir = tmp_path / "audio"
   audio_dir.mkdir()
   write_audio(audio_dir / "clip.wav")
   sent_fields: list[dict[str, object]] = []
+  sent_timeouts: list[object] = []
 
   def fake_send_multipart_request(**kwargs: object) -> asr_simple.HttpExchange:
     fields = kwargs["fields"]
     assert isinstance(fields, Mapping)
     sent_fields.append({str(key): value for key, value in fields.items()})
+    sent_timeouts.append(kwargs["timeout"])
     return asr_simple.HttpExchange(
       method="POST",
       url=str(kwargs["url"]),
@@ -533,7 +537,7 @@ def test_transcriptions_payload_includes_penalties(
     )
 
   monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
-  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 1.0)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda _path: 1.0)
 
   assert (
     asr_wer.run(
@@ -544,12 +548,15 @@ def test_transcriptions_payload_includes_penalties(
         "0.3",
         "--transcriptions-repetition-penalty",
         "1.05",
+        "--timeout",
+        "7.5",
       )
     )
     == 0
   )
   assert sent_fields[0]["frequency_penalty"] == 0.3
   assert sent_fields[0]["repetition_penalty"] == 1.05
+  assert sent_timeouts == [7.5]
 
 
 def test_transcript_write_failure_does_not_leave_partial_artifacts(
@@ -665,13 +672,17 @@ def test_completions_payload_includes_penalties(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
 ) -> None:
+  """Verify completions requests forward frequency and repetition penalty flags."""
+
   audio_path = write_audio(tmp_path / "clip.wav")
   sent_payloads: list[dict[str, object]] = []
+  sent_timeouts: list[object] = []
 
   def fake_send_json_request(**kwargs: object) -> asr_simple.HttpExchange:
     payload = kwargs["payload"]
     assert isinstance(payload, dict)
     sent_payloads.append({str(key): value for key, value in payload.items()})
+    sent_timeouts.append(kwargs["timeout"])
     return asr_simple.HttpExchange(
       method="POST",
       url=str(kwargs["url"]),
@@ -696,6 +707,8 @@ def test_completions_payload_includes_penalties(
         "0.2",
         "--completions-repetition-penalty",
         "1.1",
+        "--timeout",
+        "8.5",
       ),
       audio_file=asr_wer.AudioInput(path=audio_path, stem="clip", format="wav"),
       base_url="https://example.com",
@@ -705,6 +718,7 @@ def test_completions_payload_includes_penalties(
   )
   assert sent_payloads[0]["frequency_penalty"] == 0.2
   assert sent_payloads[0]["repetition_penalty"] == 1.1
+  assert sent_timeouts == [8.5]
 
 
 def test_verbose_exchange_uses_single_locked_print(monkeypatch: pytest.MonkeyPatch) -> None:
