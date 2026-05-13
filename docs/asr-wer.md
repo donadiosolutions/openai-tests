@@ -85,7 +85,7 @@ uv run openai-tests asr-wer eval ./audio --prep --overlap 3.0
 
 The value is validated against `prep/manifest.json`.
 
-## Temperature and Concurrency
+## Sampling and Concurrency
 
 For prepared runs, the selected endpoint temperature defaults to `0.0` when the
 user did not provide an endpoint-specific temperature:
@@ -95,6 +95,16 @@ user did not provide an endpoint-specific temperature:
 
 User-provided temperatures always win. Non-prepared runs leave temperature
 unset unless the user provides it, so providers keep their default behavior.
+
+Both endpoint paths accept penalty controls. Frequency penalty penalizes tokens
+based on their frequency in generated text only. Repetition penalty is a
+provider-compatible control that penalizes tokens based on whether they appear
+in the prompt and generated text.
+
+- `--transcriptions-frequency-penalty` and
+  `--transcriptions-repetition-penalty` for `/v1/audio/transcriptions`
+- `--completions-frequency-penalty` and
+  `--completions-repetition-penalty` for `/v1/chat/completions`
 
 `--batch` controls maximum concurrent in-flight requests and must be at least
 `1`. Prepared mode does not override it. Use `--batch 1` only when you want the

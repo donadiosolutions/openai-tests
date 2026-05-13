@@ -57,6 +57,12 @@ DEFAULT_ESPEAK_VOICE = "en-us"
 DEFAULT_ESPEAK_SPEED = 150
 DEFAULT_SYNTHESIZED_AUDIO_FORMAT = "wav"
 DEFAULT_MAX_WORD_ERROR_RATE = 0.15
+FREQUENCY_PENALTY_HELP = (
+  "Penalizes tokens based on their frequency in generated text only; provider-compatible for transcriptions."
+)
+REPETITION_PENALTY_HELP = (
+  "Provider-compatible sampling control that penalizes tokens appearing in the prompt and generated text."
+)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORD_VARIANT_GROUPS = {
   "alpha": ("alfa", "alfah", "alfer"),
@@ -238,7 +244,7 @@ def add_completions_arguments(parser: argparse.ArgumentParser) -> None:
 
   completions = parser.add_argument_group("Chat completions API parameters")
   completions.add_argument("--completions-audio-json")
-  completions.add_argument("--completions-frequency-penalty", type=float)
+  completions.add_argument("--completions-frequency-penalty", type=float, help=FREQUENCY_PENALTY_HELP)
   completions.add_argument("--completions-function-call")
   completions.add_argument("--completions-function-call-json")
   completions.add_argument("--completions-functions-json")
@@ -254,6 +260,7 @@ def add_completions_arguments(parser: argparse.ArgumentParser) -> None:
   completions.add_argument("--completions-prediction-json")
   completions.add_argument("--completions-presence-penalty", type=float)
   completions.add_argument("--completions-prompt-cache-key")
+  completions.add_argument("--completions-repetition-penalty", type=float, help=REPETITION_PENALTY_HELP)
   completions.add_argument(
     "--completions-prompt-cache-retention",
     choices=("in-memory", "24h"),
@@ -298,6 +305,8 @@ def add_transcriptions_arguments(parser: argparse.ArgumentParser) -> None:
   transcriptions.add_argument("--transcriptions-known-speaker-references-json")
   transcriptions.add_argument("--transcriptions-language")
   transcriptions.add_argument("--transcriptions-prompt")
+  transcriptions.add_argument("--transcriptions-frequency-penalty", type=float, help=FREQUENCY_PENALTY_HELP)
+  transcriptions.add_argument("--transcriptions-repetition-penalty", type=float, help=REPETITION_PENALTY_HELP)
   transcriptions.add_argument(
     "--transcriptions-response-format",
     choices=("json", "text", "srt", "verbose_json", "vtt", "diarized_json"),
@@ -562,6 +571,7 @@ def build_completions_request_config(
     "prompt_cache_key": args.completions_prompt_cache_key,
     "prompt_cache_retention": args.completions_prompt_cache_retention,
     "reasoning_effort": args.completions_reasoning_effort,
+    "repetition_penalty": args.completions_repetition_penalty,
     "response_format": parse_json_dict(args.completions_response_format_json, "completions-response-format-json"),
     "safety_identifier": args.completions_safety_identifier,
     "seed": args.completions_seed,
@@ -661,6 +671,8 @@ def build_transcriptions_request_config(args: argparse.Namespace) -> dict[str, A
       fallback_model=resolve_model(args.model),
     ),
     "prompt": args.transcriptions_prompt,
+    "frequency_penalty": args.transcriptions_frequency_penalty,
+    "repetition_penalty": args.transcriptions_repetition_penalty,
     "response_format": args.transcriptions_response_format,
     "stream": args.transcriptions_stream,
     "temperature": args.transcriptions_temperature,
@@ -945,6 +957,7 @@ def build_completions_warnings(*, request_body: dict[str, Any], response_json: A
       "prompt_cache_key",
       "prompt_cache_retention",
       "reasoning_effort",
+      "repetition_penalty",
       "response_format",
       "safety_identifier",
       "seed",
@@ -1010,12 +1023,14 @@ def build_transcriptions_warnings(*, request_body: dict[str, Any], response_json
     response_json,
     (
       "chunking_strategy",
+      "frequency_penalty",
       "include",
       "known_speaker_names",
       "known_speaker_references",
       "language",
       "model",
       "prompt",
+      "repetition_penalty",
       "response_format",
       "stream",
       "temperature",

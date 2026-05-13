@@ -42,8 +42,14 @@ def test_parser_accepts_batch_endpoint_prompt_service_tier_and_endpoint_options(
     "priority",
     "--completions-temperature",
     "0.2",
+    "--completions-repetition-penalty",
+    "1.1",
     "--transcriptions-language",
     "en",
+    "--transcriptions-frequency-penalty",
+    "0.3",
+    "--transcriptions-repetition-penalty",
+    "1.05",
     "--prep",
     "--overlap",
     "3.5",
@@ -56,7 +62,10 @@ def test_parser_accepts_batch_endpoint_prompt_service_tier_and_endpoint_options(
   assert args.prompt == "Use product names."
   assert args.service_tier == "priority"
   assert args.completions_temperature == 0.2
+  assert args.completions_repetition_penalty == 1.1
   assert args.transcriptions_language == "en"
+  assert args.transcriptions_frequency_penalty == 0.3
+  assert args.transcriptions_repetition_penalty == 1.05
   assert args.prep is True
   assert args.overlap == 3.5
 
@@ -499,6 +508,50 @@ def test_default_transcriptions_payload_uses_asr_model(
   assert sent_fields[0]["model"] == asr_simple.DEFAULT_TRANSCRIPTIONS_MODEL
 
 
+def test_transcriptions_payload_includes_penalties(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_dir = tmp_path / "audio"
+  audio_dir.mkdir()
+  write_audio(audio_dir / "clip.wav")
+  sent_fields: list[dict[str, object]] = []
+
+  def fake_send_multipart_request(**kwargs: object) -> asr_simple.HttpExchange:
+    fields = kwargs["fields"]
+    assert isinstance(fields, Mapping)
+    sent_fields.append({str(key): value for key, value in fields.items()})
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={},
+      request_body=kwargs["fields"],
+      response_status=200,
+      response_headers={"Content-Type": "application/json"},
+      response_body_text='{"text":"Alpha"}',
+      response_json={"text": "Alpha"},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_multipart_request", fake_send_multipart_request)
+  monkeypatch.setattr(asr_wer, "get_audio_duration_seconds", lambda path: 1.0)
+
+  assert (
+    asr_wer.run(
+      build_args(
+        "ground",
+        str(audio_dir),
+        "--transcriptions-frequency-penalty",
+        "0.3",
+        "--transcriptions-repetition-penalty",
+        "1.05",
+      )
+    )
+    == 0
+  )
+  assert sent_fields[0]["frequency_penalty"] == 0.3
+  assert sent_fields[0]["repetition_penalty"] == 1.05
+
+
 def test_transcript_write_failure_does_not_leave_partial_artifacts(
   monkeypatch: pytest.MonkeyPatch,
   tmp_path: Path,
@@ -606,6 +659,52 @@ def test_verbose_completions_prints_http_exchange(
   captured = capsys.readouterr()
   assert "POST https://example.com/v1/chat/completions" in captured.out
   assert "HTTP 200" in captured.out
+
+
+def test_completions_payload_includes_penalties(
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  audio_path = write_audio(tmp_path / "clip.wav")
+  sent_payloads: list[dict[str, object]] = []
+
+  def fake_send_json_request(**kwargs: object) -> asr_simple.HttpExchange:
+    payload = kwargs["payload"]
+    assert isinstance(payload, dict)
+    sent_payloads.append({str(key): value for key, value in payload.items()})
+    return asr_simple.HttpExchange(
+      method="POST",
+      url=str(kwargs["url"]),
+      request_headers={},
+      request_body=payload,
+      response_status=200,
+      response_headers={"Content-Type": "application/json"},
+      response_body_text=json.dumps({"choices": [{"message": {"content": "Alpha"}}]}),
+      response_json={"choices": [{"message": {"content": "Alpha"}}]},
+    )
+
+  monkeypatch.setattr(asr_simple, "send_json_request", fake_send_json_request)
+
+  assert (
+    asr_wer.transcribe_with_completions(
+      args=build_args(
+        "ground",
+        str(tmp_path),
+        "--endpoint",
+        "completions",
+        "--completions-frequency-penalty",
+        "0.2",
+        "--completions-repetition-penalty",
+        "1.1",
+      ),
+      audio_file=asr_wer.AudioInput(path=audio_path, stem="clip", format="wav"),
+      base_url="https://example.com",
+      api_key=None,
+    )
+    == "Alpha"
+  )
+  assert sent_payloads[0]["frequency_penalty"] == 0.2
+  assert sent_payloads[0]["repetition_penalty"] == 1.1
 
 
 def test_verbose_exchange_uses_single_locked_print(monkeypatch: pytest.MonkeyPatch) -> None:
