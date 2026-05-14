@@ -49,6 +49,8 @@ def test_build_completions_request_config_uses_audio_message_and_overrides() -> 
     completions_metadata_json='{"suite":"asr-simple"}',
     completions_modalities_json='["text"]',
     completions_response_format_json='{"type":"text"}',
+    completions_frequency_penalty=0.2,
+    completions_repetition_penalty=1.05,
     completions_temperature=0.2,
     completions_top_p=0.9,
     completions_tool_choice="none",
@@ -73,6 +75,8 @@ def test_build_completions_request_config_uses_audio_message_and_overrides() -> 
   assert payload["metadata"] == {"suite": "asr-simple"}
   assert payload["modalities"] == ["text"]
   assert payload["response_format"] == {"type": "text"}
+  assert payload["frequency_penalty"] == 0.2
+  assert payload["repetition_penalty"] == 1.05
   assert payload["temperature"] == 0.2
   assert payload["top_p"] == 0.9
   assert payload["tool_choice"] == "none"
@@ -123,12 +127,26 @@ def test_build_request_configs_reject_invalid_combinations() -> None:
     asr_simple.build_transcriptions_request_config(args)
 
 
+def test_parser_help_explains_penalty_scopes() -> None:
+  """Ensure CLI help documents generated-text and prompt-plus-generated penalty scopes."""
+
+  parser = argparse.ArgumentParser()
+  asr_simple.configure_parser(parser)
+
+  help_text = " ".join(parser.format_help().split())
+
+  assert "generated text only" in help_text
+  assert "prompt and generated text" in help_text
+
+
 def test_build_transcriptions_request_config_uses_defaults_and_overrides() -> None:
   args = build_args(
     model="gpt-common",
     transcriptions_model="gpt-asr",
     transcriptions_language="en",
     transcriptions_prompt="Spell the NATO alphabet words correctly.",
+    transcriptions_frequency_penalty=0.2,
+    transcriptions_repetition_penalty=1.1,
     transcriptions_response_format="verbose_json",
     transcriptions_temperature=0.1,
     transcriptions_timestamp_granularities=["word"],
@@ -151,6 +169,8 @@ def test_build_transcriptions_request_config_uses_defaults_and_overrides() -> No
     "language": "en",
     "model": "gpt-asr",
     "prompt": "Spell the NATO alphabet words correctly.",
+    "frequency_penalty": 0.2,
+    "repetition_penalty": 1.1,
     "response_format": "verbose_json",
     "stream": True,
     "temperature": 0.1,
@@ -659,8 +679,9 @@ def test_validate_response_format_reports_endpoint_specific_errors() -> None:
 
 def test_warning_builders_report_mismatches_and_unavailable_tools() -> None:
   completions_warnings = asr_simple.build_completions_warnings(
-    request_body={"model": "gpt-audio", "tool_choice": None, "tools": None},
+    request_body={"model": "gpt-audio", "repetition_penalty": 1.1, "tool_choice": None, "tools": None},
     response_json={
+      "repetition_penalty": 1.0,
       "model": "gpt-other",
       "choices": [
         {
@@ -673,15 +694,18 @@ def test_warning_builders_report_mismatches_and_unavailable_tools() -> None:
   )
   assert completions_warnings == [
     'WARNING: argument model was sent as "gpt-audio" and returned as "gpt-other".',
+    "WARNING: argument repetition_penalty was sent as 1.1 and returned as 1.0.",
     'WARNING: a tool call was returned for tool "transcribe", but no tools were available in the request.',
   ]
 
   transcriptions_warnings = asr_simple.build_transcriptions_warnings(
-    request_body={"language": "en", "temperature": 0.0},
-    response_json={"language": "english", "temperature": 0.0},
+    request_body={"frequency_penalty": 0.2, "language": "en", "repetition_penalty": 1.1, "temperature": 0.0},
+    response_json={"frequency_penalty": 0.0, "language": "english", "repetition_penalty": 1.0, "temperature": 0.0},
   )
   assert transcriptions_warnings == [
+    "WARNING: argument frequency_penalty was sent as 0.2 and returned as 0.0.",
     'WARNING: argument language was sent as "en" and returned as "english".',
+    "WARNING: argument repetition_penalty was sent as 1.1 and returned as 1.0.",
   ]
 
 

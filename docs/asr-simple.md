@@ -135,6 +135,7 @@ The module exposes these chat-completions parameters:
 - `--completions-prompt-cache-key`
 - `--completions-prompt-cache-retention`
 - `--completions-reasoning-effort`
+- `--completions-repetition-penalty`
 - `--completions-response-format-json`
 - `--completions-safety-identifier`
 - `--completions-seed`
@@ -154,6 +155,11 @@ The module exposes these chat-completions parameters:
 If `--completions-messages-json` is provided, it fully replaces the default messages. In that case, the caller is responsible for
 including audio in the request payload if desired.
 
+Penalty controls differ by scope. `--completions-frequency-penalty` penalizes
+tokens based on their frequency in generated text only. The provider-compatible
+`--completions-repetition-penalty` penalizes tokens based on whether they
+appear in the prompt and generated text.
+
 ## Transcriptions Parameters
 
 The module exposes these transcriptions parameters:
@@ -164,6 +170,8 @@ The module exposes these transcriptions parameters:
 - `--transcriptions-known-speaker-references`, `--transcriptions-known-speaker-references-json`
 - `--transcriptions-language`
 - `--transcriptions-prompt`
+- `--transcriptions-frequency-penalty`
+- `--transcriptions-repetition-penalty`
 - `--transcriptions-response-format`
 - `--transcriptions-stream`, `--no-transcriptions-stream`
 - `--transcriptions-temperature`
@@ -172,6 +180,12 @@ The module exposes these transcriptions parameters:
 
 List-style arguments such as `--transcriptions-include` and `--transcriptions-timestamp-granularities` can be repeated. Their JSON
 counterparts must decode to arrays and are appended to repeated CLI values.
+
+Penalty controls for transcriptions are provider-compatible passthroughs for
+OpenAI-compatible servers such as vLLM. `--transcriptions-frequency-penalty`
+penalizes tokens based on their frequency in generated text only.
+`--transcriptions-repetition-penalty` penalizes tokens based on whether they
+appear in the prompt and generated text.
 
 ## Response Extraction
 
@@ -232,7 +246,7 @@ was sent.
 The module also warns if chat completions returns a tool call and no matching tool was available in the request.
 
 The transcriptions response is inspected for selected transcriptions parameters, including model, language, response format, stream,
-temperature, timestamp granularities, chunking strategy, and diarization speaker hints.
+temperature, frequency penalty, repetition penalty, timestamp granularities, chunking strategy, and diarization speaker hints.
 
 ## Examples
 

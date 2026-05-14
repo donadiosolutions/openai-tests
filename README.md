@@ -155,6 +155,13 @@ pipx run openai-tests asr-simple \
 If the transcriptions endpoint needs a different model than chat completions,
 pass `--transcriptions-model` explicitly.
 
+For OpenAI-compatible providers that support penalty controls, pass
+`--completions-frequency-penalty`, `--completions-repetition-penalty`,
+`--transcriptions-frequency-penalty`, or
+`--transcriptions-repetition-penalty`. Frequency penalty applies to token
+frequency in generated text only; repetition penalty applies to tokens appearing
+in the prompt and generated text.
+
 By default, `asr-simple` sends two checked-in MP3 fixtures:
 
 ```text
